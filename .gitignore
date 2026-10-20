@@ -1,0 +1,34 @@
+# Configurare locala
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# React
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Date locale
+instance/
+*.db
+*.sqlite
+*.sqlite3
+uploads/
+*.log
+
+# Editor si sistem
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
