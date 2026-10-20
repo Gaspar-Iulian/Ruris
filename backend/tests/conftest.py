@@ -34,7 +34,9 @@ def session():
                 with Operations.context(MigrationContext.configure(connection)):
                     for filename in (
                         "0001_users.py", "0002_audit_events.py", "0003_revoked_tokens.py",
-                        "0004_romanian_roles.py",
+                        "0004_romanian_roles.py", "0005_suppliers.py",
+                        "0006_products.py",
+                        "0007_purchase_orders.py",
                     ):
                         spec = importlib.util.spec_from_file_location(filename[:-3], migrations / filename)
                         migration = importlib.util.module_from_spec(spec)

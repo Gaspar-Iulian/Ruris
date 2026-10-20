@@ -16,6 +16,21 @@ JWT identifica utilizatorul; un camp role din token nu acorda drepturi.
 | POST /api/auth/logout | Orice cont activ, cu sesiune valida si CSRF |
 | GET /api/users | Doar ADMIN, cu sesiune valida |
 | POST /api/users | Doar ADMIN, cu sesiune valida si CSRF; creeaza conturi pentru cele trei echipe |
+| PATCH /api/users/<id>/status | Doar ADMIN, cu sesiune valida si CSRF; activeaza/dezactiveaza cu motiv |
+| PATCH /api/users/<id>/role | Doar ADMIN, cu sesiune valida si CSRF; schimba rolul cu motiv |
+| POST /api/suppliers | Doar ACHIZITII, cu sesiune valida si CSRF |
+| PATCH /api/suppliers/<id> | Doar ACHIZITII, cu CSRF si motiv; nume si/sau email |
+| PATCH /api/suppliers/<id>/status | Doar ACHIZITII, cu CSRF si motiv; dezactivare/reactivare |
+| GET /api/suppliers | ACHIZITII, DEPOZIT si CONTABILITATE; proiectie limitata pentru depozit |
+| POST /api/products | Doar ACHIZITII, cu sesiune valida si CSRF |
+| GET /api/products | ACHIZITII, DEPOZIT si CONTABILITATE |
+| PATCH /api/products/<id> | Doar ACHIZITII, cu CSRF si motiv; modifica numele |
+| PATCH /api/products/<id>/status | Doar ACHIZITII, cu CSRF si motiv; dezactivare/reactivare |
+| POST /api/purchase-orders | Doar ACHIZITII, cu sesiune valida si CSRF; creeaza ciorne |
+| GET /api/purchase-orders | ACHIZITII vede toate; DEPOZIT si CONTABILITATE doar confirmate/inchise cu data confirmarii |
+| GET /api/purchase-orders/<id> | Aceeasi vizibilitate ca lista; DEPOZIT fara preturi, TVA si moneda |
+| PATCH /api/purchase-orders/<id> | Doar ACHIZITII, cu CSRF, motiv si versiune; editare ciorna |
+| POST /api/purchase-orders/<id>/confirm | Doar ACHIZITII, cu CSRF si versiune; confirma ciorna valida |
 
 `roles_required()` autentifica cererea si verifica rolurile declarate explicit.
 O lista de roluri goala sau un rol necunoscut produce eroare la configurarea rutei.
@@ -26,7 +41,8 @@ ADMIN are doar permisiunile declarate pentru el.
 - 403: sesiune valida, dar rolul nu permite operatia.
 - 503: baza nu permite verificarea sau citirea datelor; accesul nu este acordat.
 
-Schimbarea rolului modifica accesul la urmatoarea cerere, fara un login nou.
+Rolul se citeste din baza la fiecare cerere. Schimbarea prin API invalideaza sesiunile existente
+si solicita un login nou pentru folosirea noului rol.
 Dezactivarea contului si invalidarea sesiunii sunt verificate inaintea rolului.
 Erorile nu expun lista de utilizatori sau detaliile interne.
 
@@ -49,12 +65,10 @@ Aceste operatii nu sunt implementate inca. Matricea ghideaza construirea lor.
 
 | Operatie | Rol care modifica | Informatii necesare altor echipe |
 | --- | --- | --- |
-| Creare si confirmare comanda | ACHIZITII | Depozitul vede produsele, cantitatile si termenele; contabilitatea vede si preturile pentru verificare |
 | Confirmare receptie | DEPOZIT | Achizitiile si contabilitatea vad cantitatile acceptate si diferentele relevante |
 | Iesire, retur, ajustare de stoc | DEPOZIT | Achizitiile si contabilitatea vad efectele relevante propriului flux |
 | Inregistrare si verificare factura | CONTABILITATE | Achizitiile vad diferentele pentru care trebuie sa discute cu furnizorul |
 | Aprobare factura si evidenta platii | CONTABILITATE | Acces limitat la starea necesara fluxului |
-| Schimbare rol si activare/dezactivare conturi | ADMIN | Fiecare utilizator isi poate consulta propriile date prin /me |
 
 Administratorul tehnic nu primeste automat dreptul de a confirma receptii sau de a aproba plati.
 Accesul de citire intre echipe va avea campuri limitate in raspunsul API.

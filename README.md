@@ -52,7 +52,9 @@ GET /api/auth/me verifica sesiunea si returneaza datele curente ale contului.
 POST /api/auth/logout revoca tokenul curent in PostgreSQL si sterge cookie-urile.
 RBAC este implementat, iar lista utilizatorilor este accesibila doar rolului ADMIN.
 POST /api/users permite administratorului sa creeze conturi pentru cele trei echipe, cu audit.
-Schimbarea rolului/starii conturilor si modulele de business vor urma separat.
+PATCH /api/users/<id>/status permite activarea si dezactivarea conturilor, cu audit.
+PATCH /api/users/<id>/role permite schimbarea rolului, cu motiv si audit.
+Modulele de business vor urma separat.
 Flask-Migrate este configurat, iar folderul `backend/migrations` este initializat.
 
 ## Pornire backend pe Windows
@@ -197,7 +199,7 @@ Parolele prea lungi sunt respinse, fara trunchiere.
 Schimbarea parolei creste `token_version`, pregatind invalidarea sesiunilor viitoare.
 Loginul si verificarea contului prin JWT sunt implementate.
 Verificarea rolurilor, listarea si crearea conturilor de echipa sunt implementate.
-Schimbarea rolului si activarea/dezactivarea conturilor vor urma separat.
+Activarea/dezactivarea si schimbarea rolului sunt implementate, cu audit si protectia ultimului administrator.
 
 ## Configurare JWT
 
@@ -405,6 +407,77 @@ rolul insuficient produce 403, iar o eroare a bazei sau auditului produce 503.
 Corpul este limitat la 4096 de octeti; formatul necorespunzator produce 415 sau 413 pentru depasirea limitei.
 Nu se trimit automat emailuri cu parola si nu exista inregistrare publica.
 
+## Activarea si dezactivarea conturilor
+
+Endpoint: `PATCH /api/users/<id>/status`, disponibil doar pentru ADMIN,
+cu sesiune valida si antet CSRF corect.
+
+```json
+{
+  "is_active": false,
+  "reason": "Persoana nu mai lucreaza in echipa"
+}
+```
+
+`is_active` trebuie sa fie boolean, iar motivul trebuie sa aiba intre 1 si 1000 de caractere.
+Nu sunt acceptate alte campuri. Corpul este limitat la 4096 de octeti.
+Raspunsul 200 contine mesajul si datele publice ale contului, inclusiv is_active.
+Un cont necunoscut produce 404; datele invalide produc 400.
+
+La fiecare schimbare reala de stare creste `token_version`.
+Dezactivarea invalideaza astfel toate sesiunile contului.
+Reactivarea permite un login nou, fara a reactiva tokenurile vechi.
+Repetarea aceleiasi stari nu modifica versiunea si nu dubleaza auditul.
+Contul si istoricul sau nu sunt sterse.
+
+Serviciul reverifica administratorul si blocheaza randurile implicate.
+O blocare de tranzactie comuna serializeaza schimbarile de stare,
+astfel incat verificarile numarului de administratori activi sa nu se suprapuna.
+Ultimul administrator activ nu poate fi dezactivat; cererea produce 409.
+Un administrator se poate dezactiva pe sine doar daca ramane alt administrator activ.
+Endpointul de creare a conturilor ramane limitat la cele trei echipe.
+
+Starea, versiunea sesiunilor si auditul se salveaza impreuna.
+Auditul pastreaza autorul, motivul si valorile de dinainte si de dupa,
+cu actiunea ACTIVATE sau DEACTIVATE.
+La esec raspundem cu 503, iar starea si versiunea raman neschimbate.
+Schimbarea rolului nu este disponibila prin acest endpoint.
+
+## Schimbarea rolului
+
+Endpoint: `PATCH /api/users/<id>/role`, doar pentru ADMIN, cu sesiune si CSRF valide.
+
+```json
+{
+  "role": "CONTABILITATE",
+  "reason": "Transfer aprobat in echipa de contabilitate"
+}
+```
+
+Rolurile permise sunt ADMIN, ACHIZITII, DEPOZIT si CONTABILITATE.
+Motivul este obligatoriu si are intre 1 si 1000 de caractere.
+Sunt acceptate doar role si reason; starea activa nu este modificata de aceasta operatie.
+Raspunsul 200 include mesajul si datele publice actualizate ale contului.
+
+La schimbarea reala a rolului creste versiunea sesiunilor si se salveaza ROLE_CHANGE
+cu autorul, motivul, rolul vechi si rolul nou.
+Contul trebuie sa se autentifice din nou pentru a folosi noile drepturi.
+Repetarea aceluiasi rol nu invalideaza sesiunile si nu dubleaza auditul.
+La esecul auditului sunt anulate si rolul si versiunea sesiunilor.
+
+Protectia administratorilor foloseste aceeasi blocare ca activarea/dezactivarea.
+Ultimul administrator activ nu poate primi un rol de echipa; cererea produce 409.
+Un cont inactiv promovat la ADMIN ramane inactiv si nu permite retragerea rolului
+ultimului administrator activ.
+Transferul administrarii se poate face promovand mai intai alt cont activ,
+apoi schimband rolul administratorului initial.
+Promovarea este o operatie explicita, separata de crearea unui cont de echipa.
+
+Lipsa sesiunii/CSRF produce 401, rolul insuficient produce 403,
+contul necunoscut produce 404, datele invalide produc 400,
+iar eroarea bazei sau auditului produce 503.
+Corpul JSON este limitat la 4096 de octeti.
+
 ## Primul administrator
 
 Cu PostgreSQL pornit si migrarile aplicate, din folderul `backend`:
@@ -423,7 +496,7 @@ Initializarea este refuzata daca exista deja orice cont ADMIN, inclusiv unul ina
 O blocare de tranzactie PostgreSQL serializeaza apelurile simultane ale acestei comenzi.
 Un email folosit de alt cont este respins, fara promovarea acelui cont.
 Listarea si crearea conturilor de echipa folosesc API-ul cu autentificare si permisiuni.
-Schimbarea rolului si activarea/dezactivarea vor fi operatii separate.
+Schimbarea rolului foloseste endpointul separat de crearea contului si schimbarea starii.
 
 ## Audit
 
@@ -438,7 +511,7 @@ Pentru documente noi se face `flush` in tranzactie pentru a obtine ID-ul inainte
 Autorul va fi luat din identitatea autentificata, nu din corpul cererii trimise de utilizator.
 
 Deocamdata sunt configurate doar operatiile pe conturi:
-CREATE, UPDATE, PASSWORD_CHANGE, ACTIVATE, DEACTIVATE, LOGIN si LOGOUT.
+CREATE, UPDATE, ROLE_CHANGE, PASSWORD_CHANGE, ACTIVATE, DEACTIVATE, LOGIN si LOGOUT.
 Operatia LOGIN_FAILED foloseste separat tipul authentication, cu email si remote_address permise.
 Comanda `create-admin` inregistreaza automat auditul crearii.
 POST /api/users inregistreaza auditul crearii cu identitatea administratorului autentificat.
@@ -510,5 +583,258 @@ validarea datelor, email duplicat, pastrarea sesiunii si rollback la esecul audi
 Migrarea rolurilor este verificata pe conturi existente, inclusiv revenirea la schema anterioara
 si pastrarea valorilor istorice din audit.
 
-Ultima verificare: 202 de teste trecute, migrari la `0004_romanian_roles`,
-fara diferente intre modele si schema PostgreSQL.
+Testele starii conturilor verifica invalidarea sesiunilor, reactivarea cu login nou,
+motivul si auditul, cererile repetate, rollbackul, accesul pe roluri
+si protectia ultimului administrator, inclusiv blocarea intre conexiuni PostgreSQL.
+
+Testele schimbarii rolului verifica toate cele patru roluri, invalidarea sesiunilor,
+auditul si rollbackul, transferul administrarii, conturile inactive
+si protectia comuna pentru schimbarea rolului si a starii.
+
+## Catalogul de furnizori
+
+Migrarea `0005_suppliers` adauga furnizorii. Crearea si auditul CREATE se salveaza
+in aceeasi tranzactie. O eroare de audit anuleaza si furnizorul.
+
+`POST /api/suppliers` necesita rolul ACHIZITII, sesiune si antetul CSRF.
+Exemplu de corp JSON:
+
+```json
+{"name": "Furnizor exemplu", "tax_country": "RO", "tax_id": "12345", "email": "contact@example.com"}
+```
+
+Emailul este optional. Tara contine doua litere. Codul fiscal este pastrat cu litere
+majuscule, fara spatii si fara prefixul tarii: RO12345 si 12345 pentru RO sunt aceeasi
+identitate. Prefixele repetate sunt respinse. Perechea tara/cod fiscal este unica
+si in PostgreSQL; un duplicat returneaza 409. Aceasta este normalizare interna,
+nu verificare fiscala oficiala si nu confirma existenta firmei.
+
+`GET /api/suppliers?page=1&per_page=20` este disponibil celor trei echipe.
+Raspunsul contine suppliers, page, per_page si total. Limitele sunt page 1-1000000
+si per_page 1-100; ordinea este dupa ID. Depozitul primeste doar id, name, is_active.
+Achizitiile si contabilitatea primesc suplimentar tax_country, tax_id si email.
+ADMIN nu are acces implicit la aceste operatii. Raspunsurile nu se memoreaza in cache.
+`PATCH /api/suppliers/<id>` permite ACHIZITII sa modifice numele si/sau emailul,
+cu sesiune, CSRF si motiv obligatoriu (1-1000 de caractere dupa eliminarea spatiilor marginale).
+Tara si codul fiscal nu se modifica: o firma cu alta identitate se inregistreaza separat.
+Exemplu:
+
+```json
+{"name": "Nume actualizat", "email": null, "reason": "Actualizare date de contact"}
+```
+
+`PATCH /api/suppliers/<id>/status` permite aceluiasi rol dezactivarea sau reactivarea:
+
+```json
+{"is_active": false, "reason": "Colaborare suspendata"}
+```
+
+Starea accepta doar valori JSON true/false. Furnizorii dezactivati raman in lista;
+nu exista stergere. Inclusiv datele de contact ale unui furnizor inactiv pot fi corectate.
+Modificarile sunt serializate prin blocarea randului in PostgreSQL si se salveaza
+in aceeasi tranzactie cu auditul UPDATE, DEACTIVATE sau ACTIVATE, cu autor, motiv
+si valorile vechi/noi. O cerere care nu schimba valorile normalizate nu adauga audit.
+Un ID inexistent returneaza 404. Blocarea randului serializeaza salvarile;
+daca doua persoane modifica acelasi camp, ultima salvare prevaleaza.
+Documentele viitoare vor pastra separat datele istorice necesare.
+
+Testele catalogului verifica accesul, proiectia pentru depozit, CSRF, duplicatele,
+normalizarea, paginarea si anularea tranzactiei cand auditul esueaza.
+
+## Catalogul de produse
+
+Migrarea `0006_products` adauga produsele. `POST /api/products` necesita rolul
+ACHIZITII, sesiune valida si antetul CSRF. Corpul trebuie sa contina exact:
+
+```json
+{"sku": "FILTRU-01", "name": "Filtru ulei", "unit": "BUC"}
+```
+
+SKU este codul intern unic al produsului. Eliminam spatiile marginale si folosim
+majuscule: `filtru-01` si `FILTRU-01` identifica acelasi produs. Codul accepta
+1-64 de caractere ASCII: litere, cifre, punct, cratima si underscore; primul
+caracter trebuie sa fie litera sau cifra. Spatiile interioare nu sunt acceptate.
+Un duplicat returneaza 409, inclusiv prin restrictia unica din PostgreSQL.
+Numele are 1-200 de caractere, dupa eliminarea spatiilor marginale.
+
+Unitatile acceptate sunt BUC (bucati), KG (kilograme), L (litri), M (metri),
+M2 (metri patrati) si M3 (metri cubi). Unitatea este normalizata cu majuscule.
+Fiecare produs are o singura unitate de baza; nu facem conversii automate.
+Produsul se creeaza activ. Nu acceptam stoc sau stare din corpul cererii.
+
+`GET /api/products?page=1&per_page=20` este disponibil pentru ACHIZITII,
+DEPOZIT si CONTABILITATE. ADMIN nu primeste acces implicit.
+Raspunsul contine products, page, per_page si total; fiecare produs contine
+id, sku, name, unit si is_active. Ordinea este dupa ID. Limitele sunt
+page 1-1000000 si per_page 1-100. Parametrii duplicati sau necunoscuti sunt respinsi.
+Raspunsurile au Cache-Control: no-store.
+
+Crearea produsului si auditul CREATE se salveaza in aceeasi tranzactie.
+Auditul contine autorul si valorile initiale. Daca auditul esueaza, nu se salveaza
+nici produsul. Testele folosesc scheme PostgreSQL izolate si verifica rolurile,
+CSRF, normalizarea, duplicatele, paginarea, restrictiile bazei si rollbackul.
+
+`PATCH /api/products/<id>` permite ACHIZITII sa modifice numele, cu CSRF si motiv:
+
+```json
+{"name": "Filtru ulei actualizat", "reason": "Corectie denumire"}
+```
+
+`PATCH /api/products/<id>/status` permite dezactivarea sau reactivarea:
+
+```json
+{"is_active": false, "reason": "Produs retras din utilizare"}
+```
+
+Motivul trebuie sa aiba 1-1000 de caractere dupa eliminarea spatiilor marginale.
+Starea accepta doar true/false. SKU si unitatea nu se modifica pentru a pastra
+identitatea si baza de calcul a cantitatilor. Produsele inactive raman in lista;
+nu exista stergere. Numele poate fi corectat inclusiv pentru un produs inactiv.
+
+Salvarea blocheaza randul produsului in PostgreSQL. Auditul UPDATE, ACTIVATE sau
+DEACTIVATE contine autorul, motivul si valorile vechi/noi si se salveaza in aceeasi
+tranzactie. O eroare anuleaza intreaga operatie. Cererile fara schimbari reale
+nu adauga audit. Daca doua persoane modifica acelasi nume, ultima salvare prevaleaza.
+Documentele viitoare vor pastra separat descrierile istorice necesare.
+
+Nu exista inca evidenta stocului. Stocul va fi calculat din miscarile de marfa,
+inclusiv o miscare explicita pentru soldul initial.
+
+## Comenzi catre furnizori: ciorne
+
+Migrarea `0007_purchase_orders` adauga comenzile si pozitiile lor.
+`POST /api/purchase-orders` necesita ACHIZITII, sesiune valida si CSRF.
+
+```json
+{
+  "supplier_id": 1,
+  "currency": "RON",
+  "items": [
+    {
+      "product_id": 1,
+      "quantity": "5.000",
+      "unit_price": "12.5000",
+      "vat_rate": "0.00",
+      "expected_date": "2026-11-10"
+    }
+  ]
+}
+```
+
+ID-urile trebuie sa existe in catalog. Furnizorul si produsele trebuie sa fie active.
+Codul intern este generat de PostgreSQL, de forma CA-1, pe baza ID-ului; numerotarea
+poate avea goluri dupa operatii anulate. Moneda accepta exact RON sau EUR.
+Comanda se creeaza doar DRAFT, cu version 1. Autorul si responsabilul sunt
+utilizatorul autentificat; nu se pot trimite din client.
+
+Ciorna poate avea 0-100 de pozitii. Acelasi produs poate aparea pe pozitii distincte,
+de exemplu cu termene diferite. Fiecare pozitie primeste automat numarul de ordine,
+descrierea si unitatea din catalog. Aceste valori raman pastrate pe document chiar
+daca numele produsului se modifica ulterior.
+
+Cantitatile, preturile si TVA se trimit ca texte zecimale, cu punct, fara exponent.
+Cantitatea este pozitiva, cu maximum 3 zecimale si sub 10^15; pretul este nenegativ,
+cu maximum 4 zecimale si sub 10^14. TVA este intre 0 si 100, cu maximum 2 zecimale.
+Cota TVA este introdusa de utilizator; nu este calculata sau verificata fiscal.
+Nu rotunjim in tacere valori cu prea multe zecimale si nu folosim float pentru bani.
+Raspunsurile pastreaza zecimalele ca texte. Termenul este o data valida YYYY-MM-DD,
+inclusiv o data trecuta pentru inregistrarea comenzilor istorice.
+
+Furnizorul si produsele sunt blocate la creare pentru a verifica starea si a salva
+descrierile in aceeasi tranzactie. Antetul, toate pozitiile si auditul lor CREATE
+se salveaza impreuna. Auditul antetului refera comanda; fiecare pozitie are audit
+separat, legat prin purchase_order_id. Nu sunt trimise emailuri in acest pas.
+
+`GET /api/purchase-orders?page=1&per_page=20` returneaza orders, page, per_page si total.
+Lista contine antetele, fara pozitii. Limite: page 1-1000000 si per_page 1-100.
+Ordinea este dupa ID; parametrii duplicati/necunoscuti sunt respinsi.
+`GET /api/purchase-orders/<id>` returneaza antetul si pozitiile ordonate.
+ACHIZITII vede toate comenzile. DEPOZIT si CONTABILITATE vad numai comenzi cu
+starea CONFIRMED sau CLOSED si data confirmarii completata. Ciornele raman ascunse.
+Pentru un document ascuns, detaliul returneaza 404, iar totalul listei il exclude.
+ADMIN nu are acces implicit la aceste operatii.
+Raspunsurile au Cache-Control: no-store; un ID inexistent returneaza 404.
+
+Nu sunt implementate inca anularea sau inchiderea comenzilor.
+Ciornele nu modifica stocul si nu permit aprobarea vreunei facturi.
+
+### Editarea ciornelor
+
+`PATCH /api/purchase-orders/<id>` necesita ACHIZITII, sesiune si CSRF.
+Trimite toate campurile editabile si lista completa de pozitii, plus versiunea
+primita la citire si motivul (1-1000 de caractere dupa eliminarea spatiilor marginale):
+
+```json
+{
+  "supplier_id": 1,
+  "currency": "EUR",
+  "version": 1,
+  "reason": "Actualizare cantitate si termen",
+  "items": [
+    {
+      "id": 1,
+      "product_id": 1,
+      "quantity": "8.000",
+      "unit_price": "12.5000",
+      "vat_rate": "0.00",
+      "expected_date": "2026-11-15"
+    }
+  ]
+}
+```
+
+ID-urile din exemplu trebuie inlocuite cu cele primite din API. O pozitie existenta
+trebuie trimisa cu id-ul ei; o pozitie noua se trimite fara id. O pozitie existenta
+omisa din lista este eliminata din ciorna, cu audit DELETE. Lista goala elimina
+toate pozitiile. Ordinea listei stabileste numerotarea pozitiilor.
+
+Nu se pot folosi ID-uri ale altei comenzi sau acelasi ID de doua ori. Produsul unei
+pozitii existente nu se schimba; pentru alt produs se elimina pozitia si se adauga
+una noua. Cantitatea, pretul, TVA si termenul sunt editabile, cu validarile de la creare.
+Pozitiile existente pastreaza descrierea si unitatea istorice; cele noi le preiau
+din catalog. Furnizorul si toate produsele trimise trebuie sa fie active la salvare.
+Se poate elimina o pozitie cu produs devenit inactiv. Numarul comenzii, autorul,
+responsabilul si starea nu sunt editabile prin aceasta ruta.
+
+Numai DRAFT se poate edita; alte stari returneaza 409. Comanda este blocata in
+PostgreSQL la salvare. O versiune veche returneaza 409 si necesita recitirea comenzii,
+fara suprascriere automata. O modificare reala incrementeaza version; o cerere fara
+schimbari reale nu incrementeaza versiunea si nu adauga audit.
+
+Auditul antetului si al pozitiilor modificate/adaugate/eliminate contine autorul,
+motivul si valorile relevante vechi/noi. Toata salvarea este o singura tranzactie:
+orice eroare de audit anuleaza inclusiv modificarile, stergerile si versiunea.
+Nu este necesara o migrare noua pentru editare.
+
+### Confirmarea comenzilor
+
+`POST /api/purchase-orders/<id>/confirm` necesita ACHIZITII, sesiune si CSRF.
+Trimite doar versiunea curenta, primita la citirea comenzii:
+
+```json
+{"version": 1}
+```
+
+Comanda trebuie sa fie DRAFT si sa aiba cel putin o pozitie. Revalidam furnizorul
+si produsele active, cantitatile, preturile, TVA, termenele si unitatile produselor.
+Termenele trecute sunt permise, pentru inregistrarea comenzilor istorice.
+Descrierile existente sunt pastrate. O versiune veche sau o stare diferita de DRAFT
+returneaza 409; datele incomplete sau intrarile din catalog dezactivate returneaza 400.
+
+Confirmarea blocheaza comanda la salvare, o trece in CONFIRMED, incrementeaza
+versiunea si salveaza confirmed_at in UTC. Auditul CONFIRM pastreaza autorul,
+starea, versiunea si data veche/noua, in aceeasi tranzactie. O eroare de audit
+anuleaza confirmarea. Repetarea cererii returneaza 409, fara evenimente duplicate.
+Editarea prin ruta de ciorne este blocata dupa confirmare.
+
+Raspunsurile includ confirmed_at (null pentru ciorne, data ISO 8601 pentru confirmate).
+DEPOZIT primeste in antet doar id, number, supplier_id, status, version, confirmed_at;
+pozitiile contin id, line_number, product_id, description, unit, quantity, expected_date.
+Preturile, TVA si moneda sunt excluse din interogarile SQL pentru acest rol.
+CONTABILITATE primeste suplimentar moneda, responsabilul, autorul si preturile/TVA.
+Dezactivarea ulterioara a furnizorului sau produsului nu ascunde documentele confirmate.
+
+Confirmarea nu trimite email furnizorului si nu modifica stocul.
+Nu este necesara o migrare noua; folosim campurile existente la `0007_purchase_orders`.
+
+Ultima verificare: 452 de teste trecute; schema ramane la `0007_purchase_orders`.

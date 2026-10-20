@@ -3,9 +3,26 @@ from app.models import AuditEvent, Role
 
 
 USER_FIELDS = {"name": str, "email": str, "role": str, "is_active": bool}
-USER_ACTIONS = {"CREATE", "UPDATE", "PASSWORD_CHANGE", "ACTIVATE", "DEACTIVATE", "LOGIN", "LOGOUT"}
+USER_ACTIONS = {"CREATE", "UPDATE", "ROLE_CHANGE", "PASSWORD_CHANGE", "ACTIVATE", "DEACTIVATE", "LOGIN", "LOGOUT"}
 ENTITY_FIELDS = {"users": USER_FIELDS, "authentication": {"email": str, "remote_address": str}}
 ENTITY_ACTIONS = {"users": USER_ACTIONS, "authentication": {"LOGIN_FAILED"}}
+ENTITY_FIELDS["suppliers"] = {
+    "name": str, "tax_country": str, "tax_id": str, "email": (str, type(None)), "is_active": bool,
+}
+ENTITY_ACTIONS["suppliers"] = {"CREATE", "UPDATE", "ACTIVATE", "DEACTIVATE"}
+ENTITY_FIELDS["products"] = {"sku": str, "name": str, "unit": str, "is_active": bool}
+ENTITY_ACTIONS["products"] = {"CREATE", "UPDATE", "ACTIVATE", "DEACTIVATE"}
+ENTITY_FIELDS["purchase_orders"] = {
+    "number": str, "supplier_id": int, "currency": str, "status": str,
+    "owner_id": int, "created_by_id": int, "version": int,
+    "confirmed_at": (str, type(None)),
+}
+ENTITY_FIELDS["purchase_order_items"] = {
+    "purchase_order_id": int, "line_number": int, "product_id": int, "description": str,
+    "unit": str, "quantity": str, "unit_price": str, "vat_rate": str, "expected_date": str,
+}
+ENTITY_ACTIONS["purchase_orders"] = {"CREATE", "UPDATE", "CONFIRM"}
+ENTITY_ACTIONS["purchase_order_items"] = {"CREATE", "UPDATE", "DELETE"}
 
 
 def user_snapshot(user):
@@ -24,7 +41,8 @@ def validate_snapshot(data, fields=USER_FIELDS):
         raise ValueError("Auditul contine campuri nepermise.")
     result = {}
     for key, value in data.items():
-        if type(value) is not fields[key]:
+        allowed_types = fields[key] if isinstance(fields[key], tuple) else (fields[key],)
+        if type(value) not in allowed_types:
             raise ValueError("Valoarea unui camp de audit nu este valida.")
         if key == "role":
             value = Role(value).value

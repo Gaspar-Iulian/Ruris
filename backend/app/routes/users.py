@@ -6,9 +6,73 @@ from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 from app.models import Role
 from app.permissions import roles_required
 from app.services.users import UserCreationForbiddenError, create_team_user, list_users
+from app.services.users import LastActiveAdminError, UserManagementForbiddenError, UserNotFoundError
+from app.services.users import set_user_active, set_user_role
 
 
 users_bp = Blueprint("users", __name__)
+
+
+@users_bp.patch("/<int:user_id>/role")
+@roles_required(Role.ADMIN)
+def set_role(user_id):
+    if not 1 <= user_id <= 9223372036854775807:
+        return jsonify(message="Contul nu a fost gasit."), 404
+    if not request.is_json:
+        return jsonify(message="Cererea trebuie sa contina JSON."), 415
+    request.max_content_length = 4096
+    try:
+        data = request.get_json()
+    except RequestEntityTooLarge:
+        return jsonify(message="Cererea este prea mare."), 413
+    except BadRequest:
+        return jsonify(message="Corpul cererii nu este JSON valid."), 400
+    if not isinstance(data, dict) or set(data) != {"role", "reason"}:
+        return jsonify(message="Trimite doar role si reason."), 400
+    try:
+        user = set_user_role(actor_user_id=current_user.id, user_id=user_id, **data)
+    except UserManagementForbiddenError as error:
+        return jsonify(message=str(error)), 403
+    except UserNotFoundError as error:
+        return jsonify(message=str(error)), 404
+    except LastActiveAdminError as error:
+        return jsonify(message=str(error)), 409
+    except ValueError as error:
+        return jsonify(message=str(error)), 400
+    except SQLAlchemyError:
+        return jsonify(message="Rolul contului nu a putut fi modificat momentan."), 503
+    return jsonify(message="Rolul contului a fost salvat.", user=user)
+
+
+@users_bp.patch("/<int:user_id>/status")
+@roles_required(Role.ADMIN)
+def set_status(user_id):
+    if not 1 <= user_id <= 9223372036854775807:
+        return jsonify(message="Contul nu a fost gasit."), 404
+    if not request.is_json:
+        return jsonify(message="Cererea trebuie sa contina JSON."), 415
+    request.max_content_length = 4096
+    try:
+        data = request.get_json()
+    except RequestEntityTooLarge:
+        return jsonify(message="Cererea este prea mare."), 413
+    except BadRequest:
+        return jsonify(message="Corpul cererii nu este JSON valid."), 400
+    if not isinstance(data, dict) or set(data) != {"is_active", "reason"}:
+        return jsonify(message="Trimite doar is_active si reason."), 400
+    try:
+        user = set_user_active(actor_user_id=current_user.id, user_id=user_id, **data)
+    except UserManagementForbiddenError as error:
+        return jsonify(message=str(error)), 403
+    except UserNotFoundError as error:
+        return jsonify(message=str(error)), 404
+    except LastActiveAdminError as error:
+        return jsonify(message=str(error)), 409
+    except ValueError as error:
+        return jsonify(message=str(error)), 400
+    except SQLAlchemyError:
+        return jsonify(message="Starea contului nu a putut fi modificata momentan."), 503
+    return jsonify(message="Contul este activ." if user["is_active"] else "Contul este dezactivat.", user=user)
 
 
 @users_bp.post("")

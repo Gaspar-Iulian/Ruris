@@ -1,6 +1,10 @@
 # Schema bazei de date
 
-Schema propusa pentru prima versiune. Tabelele nu sunt create inca.
+Schema propusa pentru prima versiune. Sunt implementate `users`, `audit_events`,
+`revoked_tokens`, `suppliers`, `products`, `purchase_orders` si `purchase_order_items`.
+Pentru comenzi sunt implementate crearea/listarea/detaliul/editarea ciornelor si confirmarea.
+Campurile `closed_quantity` si `close_reason` si operatiile de anulare/inchidere sunt planificate.
+Restul tabelelor sunt planificate.
 Implementam fiecare grup impreuna cu regulile si testele lui.
 
 ## Relatiile principale
