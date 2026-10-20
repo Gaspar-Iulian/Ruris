@@ -36,9 +36,9 @@ Utilizatorii si tabelele auxiliare sunt descrise separat pentru a pastra diagram
 | Tabel | Campuri principale | Reguli |
 | --- | --- | --- |
 | users | id, name, email, password_hash, role, is_active, token_version, created_at, updated_at | Email normalizat unic; rol obligatoriu; conturile cu istoric se dezactiveaza |
-| revoked_tokens | id, user_id, token_jti, expires_at | Identificator JWT unic; nu stocam tokenul complet |
+| revoked_tokens | id, user_id, token_jti, expires_at, revoked_at | Identificator UUID unic; nu stocam tokenul complet; index pe expirare si utilizator |
 
-Rolurile primei versiuni: ADMIN, PURCHASING, WAREHOUSE, ACCOUNTING.
+Rolurile primei versiuni: ADMIN, ACHIZITII, DEPOZIT, CONTABILITATE.
 Folosim o coloana cu valori controlate; nu introducem inca tabele pentru permisiuni configurabile.
 `token_version` permite invalidarea sesiunilor unui cont, de exemplu dupa schimbarea parolei.
 La fiecare cerere protejata se verifica si starea curenta a contului si rolul din baza.

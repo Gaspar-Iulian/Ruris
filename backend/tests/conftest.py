@@ -1,0 +1,47 @@
+import importlib.util
+import os
+from pathlib import Path
+from unittest.mock import patch
+from uuid import uuid4
+
+import pytest
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+from sqlalchemy.schema import CreateSchema
+
+from app import create_app
+from app.extensions import db
+
+
+@pytest.fixture
+def session():
+    if os.getenv("RUN_POSTGRES_TESTS") != "1":
+        pytest.skip("Activeaza RUN_POSTGRES_TESTS=1 cu PostgreSQL pornit.")
+    app = create_app()
+    with app.app_context():
+        assert db.engine.dialect.name == "postgresql"
+        with db.engine.connect() as connection:
+            transaction = connection.begin()
+            test_session = Session(bind=connection, join_transaction_mode="create_savepoint")
+            try:
+                schema = f"ruris_test_{uuid4().hex}"
+                connection.execute(CreateSchema(schema))
+                connection.execute(text("SELECT set_config('search_path', :schema, true)"), {"schema": schema})
+                migrations = Path(__file__).resolve().parents[1] / "migrations" / "versions"
+                # Apply real migrations in a separate schema.
+                with Operations.context(MigrationContext.configure(connection)):
+                    for filename in (
+                        "0001_users.py", "0002_audit_events.py", "0003_revoked_tokens.py",
+                        "0004_romanian_roles.py",
+                    ):
+                        spec = importlib.util.spec_from_file_location(filename[:-3], migrations / filename)
+                        migration = importlib.util.module_from_spec(spec)
+                        spec.loader.exec_module(migration)
+                        migration.upgrade()
+                with patch.object(db, "session", test_session):
+                    yield test_session
+            finally:
+                test_session.close()
+                transaction.rollback()

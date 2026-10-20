@@ -1,4 +1,4 @@
-# Configurare locala
+# Local configuration
 .env
 .env.*
 !.env.example
@@ -18,7 +18,7 @@ dist/
 coverage/
 *.tsbuildinfo
 
-# Date locale
+# Local data
 instance/
 *.db
 *.sqlite
@@ -26,7 +26,7 @@ instance/
 uploads/
 *.log
 
-# Editor si sistem
+# Editor and system
 .idea/
 .vscode/
 .DS_Store

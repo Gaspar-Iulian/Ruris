@@ -11,11 +11,23 @@ from sqlalchemy.orm import Mapped, mapped_column, validates
 from app.extensions import db
 
 
+def normalize_email(value):
+    if not isinstance(value, str):
+        raise ValueError("Adresa de email nu este valida.")
+    try:
+        email = validate_email(value.strip(), check_deliverability=False).normalized.lower()
+    except EmailNotValidError as error:
+        raise ValueError("Adresa de email nu este valida.") from error
+    if len(email) > 254:
+        raise ValueError("Adresa de email este prea lunga.")
+    return email
+
+
 class Role(str, Enum):
     ADMIN = "ADMIN"
-    PURCHASING = "PURCHASING"
-    WAREHOUSE = "WAREHOUSE"
-    ACCOUNTING = "ACCOUNTING"
+    ACHIZITII = "ACHIZITII"
+    DEPOZIT = "DEPOZIT"
+    CONTABILITATE = "CONTABILITATE"
 
 
 class User(db.Model):
@@ -55,15 +67,7 @@ class User(db.Model):
 
     @validates("email")
     def validate_email_address(self, key, value):
-        if not isinstance(value, str):
-            raise ValueError("Adresa de email nu este valida.")
-        try:
-            email = validate_email(value.strip(), check_deliverability=False).normalized.lower()
-        except EmailNotValidError as error:
-            raise ValueError("Adresa de email nu este valida.") from error
-        if len(email) > 254:
-            raise ValueError("Adresa de email este prea lunga.")
-        return email
+        return normalize_email(value)
 
     @validates("role")
     def validate_role(self, key, value):

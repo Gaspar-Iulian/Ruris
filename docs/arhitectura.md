@@ -24,6 +24,7 @@ SQLAlchemy si migrarile vor gestiona tabelele si modificarile lor.
 Regulile functionale sunt descrise in [procese.md](procese.md).
 Aceste reguli vor ghida modelele, endpointurile si testele.
 Relatiile si campurile propuse sunt descrise in [schema-date.md](schema-date.md).
+Accesul implementat si matricea viitoare sunt descrise in [permisiuni.md](permisiuni.md).
 
 ## Organizarea codului
 

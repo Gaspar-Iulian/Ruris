@@ -3,7 +3,9 @@ from app.models import AuditEvent, Role
 
 
 USER_FIELDS = {"name": str, "email": str, "role": str, "is_active": bool}
-USER_ACTIONS = {"CREATE", "UPDATE", "PASSWORD_CHANGE", "ACTIVATE", "DEACTIVATE"}
+USER_ACTIONS = {"CREATE", "UPDATE", "PASSWORD_CHANGE", "ACTIVATE", "DEACTIVATE", "LOGIN", "LOGOUT"}
+ENTITY_FIELDS = {"users": USER_FIELDS, "authentication": {"email": str, "remote_address": str}}
+ENTITY_ACTIONS = {"users": USER_ACTIONS, "authentication": {"LOGIN_FAILED"}}
 
 
 def user_snapshot(user):
@@ -15,14 +17,14 @@ def user_snapshot(user):
     }
 
 
-def validate_snapshot(data):
+def validate_snapshot(data, fields=USER_FIELDS):
     if data is None:
         return None
-    if not isinstance(data, dict) or data.keys() - USER_FIELDS.keys():
+    if not isinstance(data, dict) or data.keys() - fields.keys():
         raise ValueError("Auditul contine campuri nepermise.")
     result = {}
     for key, value in data.items():
-        if type(value) is not USER_FIELDS[key]:
+        if type(value) is not fields[key]:
             raise ValueError("Valoarea unui camp de audit nu este valida.")
         if key == "role":
             value = Role(value).value
@@ -32,7 +34,7 @@ def validate_snapshot(data):
 
 def record_audit(*, action, entity_type, entity_id, actor_user_id=None,
                  actor_process=None, before=None, after=None, reason=None):
-    if entity_type != "users" or action not in USER_ACTIONS:
+    if action not in ENTITY_ACTIONS.get(entity_type, set()):
         raise ValueError("Operatia de audit nu este configurata.")
     if type(entity_id) is not int or entity_id <= 0:
         raise ValueError("Documentul de audit trebuie sa aiba un identificator valid.")
@@ -55,8 +57,8 @@ def record_audit(*, action, entity_type, entity_id, actor_user_id=None,
         action=action,
         entity_type=entity_type,
         entity_id=entity_id,
-        before_data=validate_snapshot(before),
-        after_data=validate_snapshot(after),
+        before_data=validate_snapshot(before, ENTITY_FIELDS[entity_type]),
+        after_data=validate_snapshot(after, ENTITY_FIELDS[entity_type]),
         reason=reason,
     )
     db.session.add(audit_event)

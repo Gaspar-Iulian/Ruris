@@ -1,40 +1,16 @@
-import os
-from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
-from sqlalchemy.orm import Session
-
-from app import create_app
-from app.extensions import db
 from app.models import AuditEvent, Role, User
 from app.services.audit import record_audit, user_snapshot
-
-
-@pytest.fixture
-def session():
-    if os.getenv("RUN_POSTGRES_TESTS") != "1":
-        pytest.skip("Activeaza RUN_POSTGRES_TESTS=1 cu PostgreSQL pornit si migrarile aplicate.")
-    app = create_app()
-    with app.app_context():
-        assert db.engine.dialect.name == "postgresql"
-        with db.engine.connect() as connection:
-            transaction = connection.begin()
-            test_session = Session(bind=connection, join_transaction_mode="create_savepoint")
-            with patch.object(db, "session", test_session):
-                try:
-                    yield test_session
-                finally:
-                    test_session.close()
-                    transaction.rollback()
 
 
 def create_user(session, **changes):
     values = {
         "name": "Utilizator test", "email": f"test-{uuid4().hex}@example.com",
-        "role": Role.PURCHASING,
+        "role": Role.ACHIZITII,
     }
     values.update(changes)
     user = User(**values)
@@ -60,7 +36,7 @@ def test_user_and_audit_can_be_loaded_from_postgres(session):
     stored_user = session.get(User, user_id)
     stored_audit = session.get(AuditEvent, audit_id)
     assert stored_user.is_active is True
-    assert stored_user.role == Role.PURCHASING
+    assert stored_user.role == Role.ACHIZITII
     assert stored_user.check_password("parola-numai-pentru-teste")
     assert stored_audit.after_data == user_snapshot(stored_user)
     assert stored_audit.actor_user_id == stored_user.id

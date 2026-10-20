@@ -81,12 +81,12 @@ def test_password_change_records_action_without_password_values(session):
 
 def test_user_snapshot_selects_only_permitted_fields():
     user = User(
-        name="Ana", email="ana@example.com", role=Role.WAREHOUSE,
+        name="Ana", email="ana@example.com", role=Role.DEPOZIT,
         is_active=True, password_hash="hash-care-nu-trebuie-copiat", token_version=3,
     )
     assert audit.user_snapshot(user) == {
         "name": "Ana", "email": "ana@example.com",
-        "role": "WAREHOUSE", "is_active": True,
+        "role": "DEPOZIT", "is_active": True,
     }
 
 

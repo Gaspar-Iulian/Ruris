@@ -4,7 +4,7 @@ from app.models import Role, User
 
 
 def make_user(**changes):
-    values = {"name": "Ana Popescu", "email": "ana@example.com", "role": Role.PURCHASING}
+    values = {"name": "Ana Popescu", "email": "ana@example.com", "role": Role.ACHIZITII}
     values.update(changes)
     return User(**values)
 
