@@ -697,8 +697,8 @@ tranzactie. O eroare anuleaza intreaga operatie. Cererile fara schimbari reale
 nu adauga audit. Daca doua persoane modifica acelasi nume, ultima salvare prevaleaza.
 Documentele viitoare vor pastra separat descrierile istorice necesare.
 
-Nu exista inca evidenta stocului. Stocul va fi calculat din miscarile de marfa,
-inclusiv o miscare explicita pentru soldul initial.
+Stocul se calculeaza din miscarile de marfa. Sunt implementate intrarile din
+receptii confirmate; soldul initial si celelalte tipuri de miscare urmeaza separat.
 
 ## Comenzi catre furnizori: ciorne
 
@@ -838,3 +838,560 @@ Confirmarea nu trimite email furnizorului si nu modifica stocul.
 Nu este necesara o migrare noua; folosim campurile existente la `0007_purchase_orders`.
 
 Ultima verificare: 452 de teste trecute; schema ramane la `0007_purchase_orders`.
+
+## Receptii de marfa: ciorne
+
+Migrarea `0008_receipts` adauga receptiile si pozitiile lor.
+`POST /api/receipts` necesita rolul DEPOZIT, sesiune si CSRF. Exemplu:
+
+```json
+{
+  "purchase_order_id": 1,
+  "delivery_reference": "AVIZ-123",
+  "received_at": "2026-10-20T10:30:00+03:00",
+  "items": [
+    {"purchase_order_item_id": 1, "received_quantity": "3.125"}
+  ]
+}
+```
+
+ID-urile se iau din comanda consultata de depozit. Comanda trebuie sa existe,
+sa fie CONFIRMED si sa aiba data confirmarii. Alte stari returneaza 409.
+Furnizorul se preia din comanda; produsul, descrierea si unitatea se preiau din
+pozitia comenzii, fara consultarea preturilor. Catalogul dezactivat ulterior nu
+impiedica inregistrarea faptului ca marfa a sosit.
+
+Referinta documentului de livrare are 1-120 de caractere dupa eliminarea spatiilor
+marginale. Nu este unica: aceeasi referinta poate aparea in mai multe transe.
+Data necesita ora si fus orar explicit (Z sau offset); se pastreaza in UTC.
+Nu impunem in acest pas o limita fata de data curenta; data introdusa trebuie verificata de operator.
+
+Receptia necesita 1-100 de pozitii, toate din aceeasi comanda. O pozitie de comanda
+poate aparea o singura data in aceeasi receptie. Pozitii omise sunt permise pentru
+livrarile partiale. Se pot inregistra mai multe receptii pentru aceeasi comanda.
+Cantitatea sosita este un text zecimal pozitiv, cu maximum 3 zecimale si sub 10^15.
+Surplusul fata de comanda este permis la inregistrare, ca fapt fizic, fara acceptare automata.
+
+Starea initiala este DRAFT, cu version 1 si numar generat REC-<id>. Autorul este
+utilizatorul autentificat. Cantitatea acceptata si cea respinsa sunt initial zero;
+toata cantitatea sosita este in asteptare. API-ul nu accepta cantitati acceptate,
+furnizor, produs, autor sau stare trimise separat de client.
+PostgreSQL verifica inclusiv egalitatea: sosita = acceptata + respinsa + in asteptare.
+
+Comanda, pozitiile ei si contul operatorului sunt blocate in tranzactia de creare.
+Receptia, pozitiile si auditul CREATE se salveaza impreuna. O eroare de audit
+anuleaza tot. Nu se modifica stocul, cantitatile comandate sau eligibilitatea facturilor.
+
+`GET /api/receipts?page=1&per_page=20` returneaza receipts, page, per_page si total,
+cu antetele ordonate dupa ID. Limite: page 1-1000000 si per_page 1-100.
+`GET /api/receipts/<id>` returneaza antetul si pozitiile, fara preturi.
+DEPOZIT vede toate receptiile. ACHIZITII si CONTABILITATE vad numai receptiile
+CONFIRMED, cu data si autorul confirmarii completate. Ciornele si receptiile anulate
+nu sunt vizibile acestor doua echipe; lista si totalul paginarii le exclud,
+iar accesarea directa returneaza 404. ADMIN nu are acces implicit.
+Raspunsurile au Cache-Control: no-store. Un ID inexistent returneaza 404.
+
+Nu sunt implementate inca anularea receptiilor sau marfa fara legatura la comanda.
+Repetarea crearii produce o noua
+ciorna; nu exista inca o cheie de idempotenta pentru aceasta operatie.
+
+Ultima verificare: 493 de teste trecute, migrari la `0008_receipts`,
+fara diferente intre modele si schema PostgreSQL.
+
+### Corectarea ciornei receptiei
+
+`PATCH /api/receipts/<id>` necesita DEPOZIT, sesiune valida si CSRF.
+Trimite referinta documentului, data cu fus orar, lista completa a pozitiilor existente,
+versiunea citita si motivul obligatoriu (1-1000 de caractere dupa eliminarea spatiilor marginale):
+
+```json
+{
+  "version": 1,
+  "reason": "Corectie dupa renumarare",
+  "delivery_reference": "AVIZ-123",
+  "received_at": "2026-10-20T10:30:00+03:00",
+  "items": [
+    {"id": 1, "received_quantity": "4.250"}
+  ]
+}
+```
+
+ID-urile se iau din detaliul receptiei. Fiecare pozitie existenta trebuie sa apara
+exact o data; se foloseste ID-ul pozitiei de receptie, nu al pozitiei de comanda.
+Cantitatea este pozitiva, cu maximum 3 zecimale si sub 10^15. Cantitatea in asteptare
+se actualizeaza la aceeasi valoare; acceptata si respinsa raman zero.
+Ordinea pozitiilor nu se modifica prin aceasta operatie.
+
+Acest pas permite corectarea referintei, datei si cantitatilor. Nu permite adaugarea,
+eliminarea sau schimbarea produsului/legaturii unei pozitii. Furnizorul, numarul,
+autorul si starea nu se trimit din client. Cantitatile deja clasificate sunt protejate
+de suprascriere; vor necesita operatii separate de corectie.
+
+Receptia trebuie sa fie DRAFT, fara data sau autor de confirmare. O alta stare sau
+o versiune veche returneaza 409. Un ID inexistent returneaza 404. Salvarea blocheaza
+randul receptiei, pastreaza ID-urile si descrierile si incrementeaza versiunea doar
+pentru schimbari reale. O cerere echivalenta dupa normalizare nu adauga audit.
+Corectarea cantitatilor nu necesita reactivarea produsului sau furnizorului si nu
+modifica comanda sursa ori stocul.
+
+Auditul UPDATE al antetului si al pozitiilor modificate pastreaza autorul, motivul
+si valorile vechi/noi. Totul se salveaza intr-o singura tranzactie; o eroare de audit
+anuleaza inclusiv cantitatile si versiunea. Nu este necesara o migrare noua.
+
+Verificarea acestei modificari: 91 de teste pentru receptii si audit trecute.
+Ultima suita completa, inaintea editarii receptiilor: 493 de teste trecute.
+
+### Confirmarea receptiei si intrarea in stoc
+
+Migrarea `0009_stock_movements` adauga registrul de intrari de stoc.
+`POST /api/receipts/<id>/confirm` necesita DEPOZIT, sesiune, CSRF, versiune curenta,
+motiv obligatoriu (1-1000 de caractere) si clasificarea tuturor pozitiilor:
+
+```json
+{
+  "version": 1,
+  "reason": "Verificare cantitativa la primire",
+  "items": [
+    {
+      "id": 1,
+      "accepted_quantity": "2.000",
+      "rejected_quantity": "1.000",
+      "pending_quantity": "0.125"
+    }
+  ]
+}
+```
+
+In exemplu, cantitatea sosita trebuie sa fie 3.125. ID-ul este al pozitiei de
+receptie. Toate cantitatile sunt texte zecimale nenegative, cu maximum 3 zecimale,
+iar suma acceptata + respinsa + in asteptare trebuie sa fie exact cantitatea sosita.
+Pozitiile lipsa, duplicate sau ale altei receptii sunt respinse cu 400.
+Recepția trebuie sa fie DRAFT, neconfirmata, cu cantitatile initiale in asteptare.
+Versiunea veche sau repetarea confirmarii returneaza 409, fara dublarea intrarilor.
+
+Acceptarea pozitiva necesita o comanda CONFIRMED, deschisa, furnizor compatibil,
+acelasi produs si aceeasi unitate, iar produsul trebuie sa fie activ.
+Nu este necesara reactivarea furnizorului pentru o livrare dintr-o comanda deja confirmata.
+Cantitatea acceptata cumulata in toate receptiile confirmate nu poate depasi
+cantitatea comandata pe pozitia respectiva. Surplusul poate ramane in asteptare
+sau poate fi respins. Se poate confirma o receptie integral respinsa/in asteptare,
+fara miscare de stoc; restrictiile comenzii se aplica acceptarii pozitive.
+
+Salvarea blocheaza receptia, comenzile, pozitiile de comanda si produsele implicate,
+in ordine stabila. Acceptarea cumulata se verifica dupa obtinerea blocarilor.
+Testul cu doi operatori si conexiuni simultane verifica faptul ca acelasi rest
+nu poate fi acceptat de doua ori.
+
+Confirmarea completeaza confirmed_at in UTC si confirmed_by_id, incrementeaza
+versiunea si blocheaza editarea prin ruta de ciorne. Fiecare cantitate acceptata
+pozitiva genereaza o miscare RECEIPT, cu autor, motiv si cheie de operatie unica.
+Cantitatile respinse sau in asteptare nu intra in stoc.
+Antetul, clasificarea, miscarile si auditul CONFIRM/UPDATE/CREATE se salveaza
+intr-o singura tranzactie. Orice eroare anuleaza toate aceste modificari.
+
+Miscarile sunt protejate impotriva UPDATE si DELETE atat prin ORM, cat si prin
+trigger PostgreSQL. Administratorul bazei poate interveni asupra protectiilor;
+acestea protejeaza fluxul normal al aplicatiei. Corectiile vor folosi miscari separate.
+
+`GET /api/stock?page=1&per_page=20` permite celor trei echipe consultarea cantitatilor.
+ADMIN nu are acces implicit. Raspunsul contine stock, page, per_page si total;
+fiecare produs contine id, sku, name, unit, is_active si quantity ca text cu 3 zecimale.
+Sunt incluse si produsele inactive sau fara intrari (cantitate zero). Ordinea este
+dupa ID, page este 1-1000000, per_page este 1-100, iar parametrii necunoscuti sau
+duplicati sunt respinsi. Raspunsurile au Cache-Control: no-store.
+Soldul se calculeaza prin suma miscarilor, fara un sold editabil separat.
+
+In acest pas nu exista iesiri, retururi, ajustari, anulare de receptie sau acceptare
+ulterioara a cantitatilor in asteptare. Registrul permite momentan numai RECEIPT.
+Consultarea receptiilor confirmate este disponibila si pentru ACHIZITII si
+CONTABILITATE. Nu exista inca verificarea facturilor.
+
+Ultima verificare: 557 de teste trecute, inclusiv confirmarea simultana de catre
+doi operatori. Migrari la `0009_stock_movements`, fara diferente intre modele
+si schema PostgreSQL.
+
+### Consultarea receptiilor intre echipe
+
+`GET /api/receipts` si `GET /api/receipts/<id>` folosesc rolul curent verificat
+in baza de date. DEPOZIT pastreaza accesul la toate receptiile. ACHIZITII si
+CONTABILITATE primesc doar documentele confirmate complet (stare CONFIRMED,
+confirmed_at si confirmed_by_id nenule). Filtrarea se aplica in interogarea SQL,
+inclusiv totalului listei; nu este doar o ascundere in interfata.
+
+Antetul contine numarul, furnizorul, documentul de livrare, datele receptiei si
+confirmarii, autorii, starea si versiunea. Pozitiile contin produsul, descrierea,
+unitatea, legatura la comanda si cantitatile sosite/acceptate/respinse/in asteptare.
+Nu exista preturi sau date de autentificare in aceste raspunsuri.
+O receptie confirmata poate avea marfa in asteptare sau respinsa; confirmarea nu
+inseamna acceptarea integrala si nu aproba plata vreunei facturi.
+
+Celelalte echipe au doar drept de consultare. Crearea, corectarea ciornei si
+confirmarea raman disponibile exclusiv pentru DEPOZIT, cu sesiune si CSRF.
+Nu este necesara o migrare noua si citirea nu modifica stocul sau auditul.
+
+Verificarea acestei modificari: 112 teste pentru receptii trecute, inclusiv
+toate rolurile, totalul filtrat, accesul direct la ciorne si documentele din cache.
+
+### Restul de livrat pe comanda
+
+`GET /api/purchase-orders/<id>/delivery` returneaza situatia cantitativa pe pozitii.
+Accesul este identic detaliului comenzii: ACHIZITII vede inclusiv ciornele;
+DEPOZIT si CONTABILITATE vad numai comenzile confirmate/inchise cu data confirmarii.
+ADMIN nu primeste acces implicit. Un document ascuns sau inexistent returneaza 404.
+
+Raspunsul contine delivery, cu id, number, status si items. Fiecare pozitie contine
+id, line_number, product_id, description, unit, quantity, expected_date,
+accepted_quantity, remaining_quantity si delivery_status. Nu include preturi sau TVA.
+Cantitatile sunt texte cu 3 zecimale.
+
+Formula este remaining_quantity = quantity - accepted_quantity. Cantitatea acceptata
+este suma cantitatilor acceptate din receptiile CONFIRMED, legate la aceeasi pozitie
+de comanda. Ciornele, cantitatile respinse si cele in asteptare nu reduc restul.
+Pozitiile cu acelasi produs se calculeaza separat, inclusiv intre comenzi diferite.
+
+delivery_status este NOT_RECEIVED cand nu exista acceptari, PARTIAL cand exista
+acceptari si rest pozitiv, COMPLETE cand restul este zero. Aceste valori descriu
+pozitia, separat de starea documentului DRAFT/CONFIRMED/CLOSED/CANCELLED.
+In ciorna, calculul este informativ; nu produce obligatii de receptie.
+
+Restul se calculeaza la citire, fara o coloana editabila in baza de date si fara
+migrare noua. Ruta nu modifica auditul, stocul sau versiunea comenzii si foloseste
+Cache-Control: no-store. In acest pas nu exista inchiderea explicita a restului,
+retururi sau corectii; cand le implementam, vom extinde formula cu efectele lor.
+
+Verificarea acestei modificari: 210 teste pentru comenzi si receptii trecute,
+inclusiv livrari in transe, precizie zecimala, separarea pozitiilor si accesul pe roluri.
+
+### Pozitii de comanda intarziate
+
+`GET /api/purchase-orders/overdue?page=1&per_page=20` este disponibil pentru
+ACHIZITII, DEPOZIT si CONTABILITATE. ADMIN nu primeste acces implicit.
+O pozitie este intarziata doar daca termenul este inaintea zilei curente din
+Europe/Bucharest si restul de livrat este pozitiv. Termenele de azi nu sunt
+intarziate. Zilele de intarziere sunt zile calendaristice, nu zile lucratoare.
+
+Sunt incluse doar comenzile CONFIRMED cu data confirmarii completata. Ciornele,
+comenzile anulate/inchise si pozitiile complet acceptate sunt excluse.
+Livrarile partial acceptate raman vizibile pentru restul deschis.
+Marfa respinsa/in asteptare si receptiile neconfirmate nu reduc restul.
+
+Raspunsul contine items, page, per_page, total, as_of (data de referinta) si
+timezone (Europe/Bucharest). Fiecare pozitie contine order_id, order_number,
+supplier_id, id (ID-ul pozitiei), line_number, product_id, description, unit,
+quantity, expected_date, accepted_quantity, remaining_quantity si days_overdue.
+Cantitatile sunt texte cu 3 zecimale; nu sunt incluse preturi sau TVA.
+
+Ordinea este dupa termen crescator, apoi comanda si numarul pozitiei. Paginarea
+se aplica dupa filtrarea intarzierilor: page 1-1000000 si per_page 1-100.
+Parametrii duplicati/necunoscuti, inclusiv o data de referinta trimisa de client,
+sunt respinsi cu 400. Ora locala se calculeaza in PostgreSQL cu Europe/Bucharest,
+inclusiv regulile de vara/iarna; nu folosim fusul orar implicit al sistemului.
+
+Aceeasi agregare a acceptarilor confirmate este folosita atat pentru restul
+comenzii, cat si pentru intarzieri. Nu salvam separat un indicator de intarziere,
+nu modificam documentele/auditul/stocul si nu trimitem emailuri in acest pas.
+Raspunsurile au Cache-Control: no-store. Nu este necesara o migrare noua.
+
+Verificarea intarzierilor: 226 de teste pentru comenzi si receptii trecute,
+inclusiv limita dintre zile, fusul orar vara/iarna, livrari partiale si paginare.
+
+### Previzualizarea sumarului email de intarzieri
+
+Din directorul backend:
+
+```powershell
+.\.venv\Scripts\python.exe -m flask --app app preview-overdue-emails
+```
+
+Comanda pregateste mesajele pentru responsabilii din ACHIZITII, fara trimitere.
+Afiseaza destinatarul, subiectul, continutul si numarul de mesaje. Este o comanda
+pentru operatorul serverului, nu o ruta HTTP disponibila utilizatorilor aplicatiei.
+Nu necesita setari SMTP si nu modifica documentele, stocul sau auditul.
+
+Destinatarul este owner_id al comenzii, numai daca acel cont este activ si are
+in continuare rolul ACHIZITII. Nu exista destinatari impliciti ADMIN sau din alte
+echipe. O persoana primeste un singur mesaj cu toate pozitiile sale intarziate,
+ordonate dupa termen, comanda si numarul pozitiei. Daca nu are intarzieri, nu
+pregatim un mesaj gol. Conturile neeligibile sunt excluse, iar CLI afiseaza
+numarul pozitiilor fara responsabil eligibil, pentru clarificare.
+
+Serviciul foloseste aceeasi interogare de intarzieri ca API-ul, cu aceeasi data
+Europe/Bucharest. Include toate pozitiile eligibile, fara limita paginii API.
+Corpul este text simplu, generat din app/templates/emails/overdue_digest.txt,
+si contine numarul comenzii, pozitia, descrierea, restul, unitatea, termenul
+si zilele de intarziere. Nu include preturi, TVA, parole sau tokenuri.
+
+Generarea si previzualizarea sunt disponibile separat de trimiterea SMTP locala
+de test descrisa mai jos. Jurnalul persistent si deduplicarea zilnica sunt implementate.
+SMTP extern nu este implementat. Programarea zilnica locala si reluarile programate
+pentru erori certe sunt implementate prin workerul CLI descris mai jos.
+La preluarea fiecarui mesaj este reverificata eligibilitatea
+destinatarului. Inainte de activarea in utilizare reala se valideaza destinatarii
+si frecventa sumarului cu firma.
+
+Verificarea acestui pas: 242 de teste pentru notificari, comenzi, receptii si
+comenzile CLI relevante trecute.
+
+### Testarea emailurilor in Mailpit local
+
+Porneste serviciul din radacina proiectului:
+
+```powershell
+docker compose up -d mailpit
+```
+
+Deschide inboxul de test la http://localhost:8025. Mailpit este fixat la versiunea
+v1.31.6. Porturile SMTP 1025 si UI 8025 sunt publicate numai pe 127.0.0.1.
+MAILPIT_SMTP_PORT si MAILPIT_UI_PORT sunt optionale in .env si au aceste valori implicite.
+Nu sunt necesare credentiale SMTP pentru acest server local de test.
+
+Din backend poti trimite un mesaj demonstrativ cu date sintetice, fara a crea
+utilizatori sau documente in baza de date:
+
+```powershell
+.\.venv\Scripts\python.exe -m flask --app app send-test-email
+```
+
+Mesajul are subiectul [TEST] Ruris, destinatarul achizitii@example.com si un rest
+demonstrativ de 7.000 BUC cu termenul de ieri, dupa data Europe/Bucharest.
+Foloseste acelasi sablon ca sumarul real. Necesita PostgreSQL pentru calculul
+datei de referinta. Mesajul este capturat local, nu trimis la casuta destinatarului.
+
+Pentru sumarele calculate din comenzile existente:
+
+```powershell
+.\.venv\Scripts\python.exe -m flask --app app send-overdue-emails-local
+```
+
+Transportul foloseste smtplib si EmailMessage din biblioteca standard Python.
+Se conecteaza exclusiv la 127.0.0.1, pe MAILPIT_SMTP_PORT, cu timeout de 5 secunde.
+Nu configureaza relay SMTP, autentificare sau TLS; este exclusiv pentru testul local
+cu Flask rulat pe calculator. Containerizarea ulterioara a backendului va necesita
+adaptarea adresei serviciului. Erorile conexiunii nu expun detalii interne.
+
+CLI raporteaza numarul mesajelor acceptate de Mailpit si starile pentru ziua curenta.
+Sumarele au acum jurnal persistent si deduplicare zilnica. Mesajele SENT, SENDING
+si UNKNOWN nu se retrimit la repetarea comenzii. Trimiterea sumarurilor adauga audit,
+fara sa modifice documentele sau stocul. Mesajul demonstrativ send-test-email ramane
+separat, poate fi repetat si nu foloseste jurnalul sumarurilor.
+
+Testul de integrare SMTP se activeaza explicit, cu Mailpit si PostgreSQL pornite:
+
+```powershell
+$env:RUN_POSTGRES_TESTS='1'
+$env:RUN_MAILPIT_TESTS='1'
+.\.venv\Scripts\python.exe -m pytest tests/test_mail.py tests/test_notifications.py tests/test_create_admin.py tests/test_jwt_config.py -q -p no:cacheprovider
+```
+
+Testul foloseste date intr-o schema PostgreSQL izolata si verifica mesajul capturat
+prin API-ul Mailpit, cu destinatar unic de test. Nu sterge mesajele deja existente
+in inboxul local. Ultima verificare: 46 de teste trecute, inclusiv SMTP real local.
+
+Documentatie: [Mailpit Docker](https://mailpit.axllent.org/docs/install/docker/)
+si [API Mailpit](https://mailpit.axllent.org/docs/api-v1/).
+
+### Jurnalul trimiterilor si prevenirea duplicatelor
+
+Migrarea `0010_email_delivery` adauga `email_outbox` si `email_attempts`.
+Comanda `send-overdue-emails-local` pregateste in PostgreSQL un singur sumar
+OVERDUE/LOCAL_MAILPIT pentru fiecare responsabil si zi Europe/Bucharest.
+Unicitatea este impusa in baza de date, inclusiv intre procese simultane.
+Mesajul este o copie a sumarului la pregatire: destinatar, subiect, continut si hash.
+
+| Stare | Semnificatie | Comportament la o noua rulare |
+| --- | --- | --- |
+| PENDING | Pregatit, fara trimitere inceputa | Poate fi preluat |
+| SENDING | Incercarea a fost salvata inainte de SMTP | Nu se retrimite automat |
+| SENT | Serverul SMTP a confirmat acceptarea | Nu se retrimite in aceeasi zi |
+| FAILED | Eroare inaintea trimiterii sau refuz SMTP explicit | Poate fi reluat dupa next_attempt_at, maximum 3 incercari totale |
+| UNKNOWN | Conexiune intrerupta dupa inceperea transmiterii | Nu se retrimite automat |
+| SKIPPED | Destinatar sau continut schimbat/ineligibil | Nu se trimite copia veche |
+
+Fiecare incercare are numar, moment de inceput/finalizare si cod de eroare controlat.
+Nu salvam exceptii brute, parole sau credentiale SMTP in jurnal. Corpul mesajului
+este pastrat in outbox, pentru trasabilitatea datelor pregatite.
+Auditul ENQUEUE/START/SENT/FAILED/UNKNOWN/SKIP pastreaza procesul autor si starile,
+fara a copia corpul emailului. Schimbarea starii si auditul ei sunt atomice in PostgreSQL.
+
+Preluarea foloseste blocare de rand cu SKIP LOCKED. Starea SENDING si incercarea
+sunt salvate inainte de contactarea serverului SMTP. Alte procese nu preiau aceeasi
+trimitere. Un test cu doua conexiuni simultane verifica atat unicitatea pregatirii,
+cat si preluarea de catre un singur proces.
+
+Inainte de START verificam contul activ, rolul ACHIZITII, emailul curent si hash-ul
+sumarului regenerat pentru rularea curenta. Un sumar modificat intre pregatire si
+preluare devine SKIPPED; nu inlocuim automat mesajul zilei cu alt continut. O zi noua
+permite un sumar nou, calculat din datele actuale. Mesajele fara intarzieri nu se pregatesc.
+
+SMTP si PostgreSQL nu formeaza o singura tranzactie. Daca serverul accepta mesajul,
+dar salvarea rezultatului esueaza, randul ramane SENDING. SENDING si UNKNOWN necesita
+verificare manuala in Mailpit; nu exista inca o comanda de resetare/retrimitere fortata.
+Un Message-ID stabil ajuta verificarea, dar nu garanteaza deduplicarea de catre SMTP.
+Protectia previne retrimiterea automata a rezultatelor neclare; nu promite livrare
+exact o data pentru orice defect de retea sau oprire a procesului.
+
+Din backend, pentru ultimele inregistrari:
+
+```powershell
+.\.venv\Scripts\python.exe -m flask --app app list-email-deliveries --limit 20
+```
+
+Limita este 1-100. CLI afiseaza ID-ul, ziua, responsabilul, starea, numarul de
+incercari si ultimul cod de eroare. Nu afiseaza corpul mesajului. Inregistrarile
+se pastreaza si dupa repornirea aplicatiei, in volumul PostgreSQL.
+Comanda nu este o ruta HTTP; accesul este cel al operatorului serverului.
+
+Procesarea curenta priveste ziua curenta, nu reia mesaje din zile anterioare.
+Exista un worker zilnic local si un interval fix persistent intre reincercari.
+Nu exista backoff exponential, SMTP extern sau tratarea facturilor blocate.
+
+Ultima verificare: 625 de teste trecute, inclusiv pregatirea/preluarea concurenta,
+repetarea trimiterii SMTP reale fara duplicate si erori dupa acceptarea SMTP.
+Migrari la `0010_email_delivery`, fara diferente intre modele si schema PostgreSQL.
+
+### Programarea zilnica a notificarilor locale
+
+Migrarea `0011_email_retry_schedule` adauga next_attempt_at in jurnal.
+Din backend, intr-un terminal separat:
+
+```powershell
+.\.venv\Scripts\python.exe -m flask --app app run-notification-worker
+```
+
+Procesul trebuie sa ramana pornit. Nu porneste automat odata cu serverul Flask si
+nu se instaleaza ca serviciu Windows. Ctrl+C il opreste. Pentru productie/deploy
+va trebui rulat sub un manager de procese sau intr-un container dedicat.
+
+Implicit, sumarul zilnic este procesat la 08:00 Europe/Bucharest, cu verificare
+la fiecare 60 de secunde. Ora se calculeaza in PostgreSQL, inclusiv vara/iarna.
+Configuratia optionala din .env este:
+
+```dotenv
+EMAIL_DAILY_TIME=08:00
+EMAIL_RETRY_SECONDS=300
+```
+
+Ora necesita format HH:MM. Intervalul reincercarilor este intre 60 si 3600 de secunde.
+La schimbarea setarilor se reporneste workerul. `--poll-seconds` permite o verificare
+la 1-60 de secunde, fara a modifica ora zilnica sau intervalul de reincercare.
+
+Pentru o singura verificare, fara bucla si fara asteptare:
+
+```powershell
+.\.venv\Scripts\python.exe -m flask --app app run-notification-worker --once
+```
+
+`--once` respecta ora configurata, nu forteaza trimiterea inaintea ei.
+Daca workerul porneste dupa ora programata, proceseaza ziua curenta; nu genereaza
+retroactiv sumaruri pentru zilele in care a fost oprit. Dupa finalizarea zilei,
+evita alte rulari in acelasi proces pana in ziua urmatoare. La repornire poate
+reverifica ziua curenta; unicitatea din outbox previne retrimiterea mesajelor SENT.
+Intarzierile noi aparute dupa finalizarea sumarului sunt incluse in urmatorul sumar zilnic.
+
+La o eroare SMTP certa, workerul salveaza in PostgreSQL next_attempt_at (UTC),
+implicit peste 5 minute. Pana atunci nu contacteaza din nou SMTP, inclusiv dupa
+repornire sau o rulare manuala. Maximum 3 incercari totale per mesaj si zi.
+Comanda manuala send-overdue-emails-local pastreaza comportamentul imediat pentru
+erorile produse de ea, dar respecta orice next_attempt_at deja programat.
+SENDING si UNKNOWN nu sunt reluate automat. Modificarile momentului de reincercare
+sunt incluse in audit, iar list-email-deliveries afiseaza termenul in UTC.
+
+Erorile PostgreSQL sunt raportate fara detalii de conexiune, iar workerul reincearca
+verificarea la urmatorul interval. Tranzactia de citire este inchisa intre verificari.
+Deduplicarea si blocarile din jurnal raman valabile daca pornesc mai multi workeri.
+SMTP este in continuare exclusiv Mailpit local; acest pas nu trimite emailuri externe.
+
+Workerul a fost verificat efectiv cu --once. Nu este lasat pornit permanent in fundal.
+
+Ultima verificare: 650 de teste trecute, inclusiv ora vara/iarna, recuperarea dupa
+repornire si respectarea termenului persistent de reincercare. Migrari la
+`0011_email_retry_schedule`, fara diferente intre modele si schema PostgreSQL.
+
+## Facturi in ciorna
+
+Contabilitatea poate crea si consulta facturi prin POST /api/invoices,
+GET /api/invoices?page=1&per_page=20 si GET /api/invoices/{id}.
+Celelalte roluri, inclusiv ADMIN, nu au acces. Crearea necesita cookie JWT si
+antetul X-CSRF-TOKEN, la fel ca celelalte operatii de scriere.
+
+Exemplu de corp JSON (inlocuieste identificatorii cu furnizorul si produsul existente):
+
+```json
+{
+  "supplier_id": 1,
+  "series": "AB",
+  "number": "001",
+  "invoice_date": "2026-10-20",
+  "due_date": "2026-11-20",
+  "currency": "EUR",
+  "items": [
+    {"product_id": 1, "quantity": "3.000", "unit_price": "0.3350", "vat_rate": "19.00"}
+  ]
+}
+```
+
+Seria poate fi goala pentru facturi fara serie. Seria si numarul se normalizeaza
+prin eliminarea spatiilor exterioare si transformare in majuscule. Accepta numai
+litere ASCII, cifre si separatorii . _ / -, cu litera sau cifra la inceput.
+Spatiile interne sunt respinse; zerourile initiale din numar se pastreaza.
+Unicitatea furnizor + serie + numar este impusa in PostgreSQL; un duplicat produce 409.
+Acestea sunt conventii interne de identificare; nu reprezinta validare fiscala.
+
+Furnizorul si produsele trebuie sa fie active. Denumirea si unitatea produsului
+sunt copiate pe linie, pentru pastrarea istoricului. O ciorna poate avea 0-100 de linii.
+Scadenta nu poate preceda data facturii. Sunt acceptate monedele RON si EUR;
+conversia valutara nu este inca implementata.
+
+Cantitatea (3 zecimale), pretul (4) si TVA procentual (2, intre 0 si 100) sunt
+trimise ca texte zecimale. Sumele sunt calculate de server cu Decimal:
+netul liniei = cantitate * pret, rotunjit la 2 zecimale cu ROUND_HALF_UP;
+TVA liniei = net rotunjit * procent / 100, rotunjit la 2 zecimale.
+Totalurile antetului sunt suma valorilor liniilor. Exemplul produce net 1.01,
+TVA 0.19 si total 1.20 EUR. Aceasta conventie va necesita reconciliere cu valorile
+documentului furnizorului in etapa verificarii facturilor.
+
+Starea este exclusiv DRAFT. Clientul nu poate impune totaluri, stare sau autor.
+Factura, liniile si auditul sunt salvate intr-o singura tranzactie: o eroare
+anuleaza intreaga operatie. Nu exista inca alocare la receptii,
+verificare in trei pasi, aprobare sau plata.
+
+Migrarea acestui pas: 0012_invoice_drafts.
+
+Verificare dupa acest pas: 687 de teste trecute (37 noi pentru facturi), cu
+PostgreSQL si Mailpit locale. Migrarea este aplicata; flask db check nu identifica
+diferente intre modele si schema.
+
+## Editarea facturilor in ciorna
+
+PATCH /api/invoices/{id} este disponibil numai contabilitatii, cu JWT si CSRF.
+Corpul contine toate campurile de la creare, plus version (versiunea citita)
+si reason (motiv obligatoriu, 1-1000 de caractere dupa eliminarea spatiilor exterioare).
+Lista items reprezinta toate liniile dorite dupa salvare:
+
+- Linia existenta include id, product_id, quantity, unit_price si vat_rate.
+- Linia noua contine aceleasi campuri, fara id.
+- Liniile existente omise sunt eliminate din ciorna si pastrate in audit ca DELETE.
+- Ordinea listei stabileste numerele liniilor, de la 1 la maximum 100.
+
+Produsul unei linii existente este fix; pentru inlocuire, elimina linia si adauga
+una noua. Liniile pastrate retin denumirea si unitatea initiale. Furnizorul si
+produsele trimise trebuie sa fie active, inclusiv la editare. Antetul, cantitatile,
+preturile si TVA sunt validate prin aceeasi functie ca la creare; serverul recalculeaza
+toate sumele. Autorul initial si starea nu pot fi schimbate din cerere.
+
+Serverul blocheaza randul facturii si compara version cu valoarea actuala.
+O versiune veche sau o stare diferita de DRAFT produce 409; clientul reincarca
+documentul inainte de a incerca din nou. O schimbare efectiva creste version cu 1.
+O cerere identica dupa normalizare, cu aceleasi ID-uri si ordine, nu modifica
+versiunea si nu adauga audit. Toate modificarile si auditul se salveaza atomic.
+Un duplicat furnizor/serie/numar produce 409 si anuleaza intreaga editare.
+
+Migrarea 0013_invoice_line_order permite numere pozitive temporare pentru
+reordonare in tranzactie, fara conflicte cu unicitatea factura/numar linie.
+Limita de 100 de linii ramane verificata de serviciu.
+
+Verificare pentru editare: toate cele 56 de teste ale modulului facturi au trecut,
+inclusiv cele 37 existente de creare si consultare si 19 noi pentru editare.
+Migrarea 0013 este aplicata; flask db check nu detecteaza diferente.
+Suita completa a fost rulata la pasul anterior (687 de teste); in acest pas
+au fost rulate testele modulului modificat.

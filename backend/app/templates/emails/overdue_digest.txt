@@ -1,0 +1,10 @@
+Buna, {{ name }}!
+
+La data de {{ as_of }} (Europe/Bucharest), ai {{ items | length }} pozitii de comanda intarziate:
+{% for item in items %}
+- Comanda {{ item.order_number }}, pozitia {{ item.line_number }}: {{ item.description }}
+  Rest de livrat: {{ item.remaining_quantity }} {{ item.unit }}; termen: {{ item.expected_date }}; intarziere: {{ item.days_overdue }} zile.
+{% endfor %}
+
+Verifica termenele cu furnizorii si urmareste receptiile in aplicatie.
+Restul include doar cantitatile care nu au fost acceptate prin receptii confirmate.

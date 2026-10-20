@@ -8,6 +8,8 @@ from app.permissions import roles_required
 from app.services.purchase_orders import OrderCreationForbiddenError, OrderNotFoundError, create_order, get_order, list_orders
 from app.services.purchase_orders import OrderConflictError, OrderManagementForbiddenError, edit_order
 from app.services.purchase_orders import confirm_order
+from app.services.purchase_orders import get_order_delivery
+from app.services.purchase_orders import list_overdue_items
 
 
 purchase_orders_bp = Blueprint("purchase_orders", __name__)
@@ -113,6 +115,19 @@ def detail(order_id):
         return jsonify(message="Comanda nu este disponibila momentan."), 503
 
 
+@purchase_orders_bp.get("/<int:order_id>/delivery")
+@roles_required(Role.ACHIZITII, Role.DEPOZIT, Role.CONTABILITATE)
+def delivery(order_id):
+    if not 1 <= order_id <= 9223372036854775807:
+        return jsonify(message="Comanda nu a fost gasita."), 404
+    try:
+        return jsonify(delivery=get_order_delivery(order_id, role=current_user.role))
+    except OrderNotFoundError as error:
+        return jsonify(message=str(error)), 404
+    except SQLAlchemyError:
+        return jsonify(message="Situatia livrarii nu este disponibila momentan."), 503
+
+
 @purchase_orders_bp.get("")
 @roles_required(Role.ACHIZITII, Role.DEPOZIT, Role.CONTABILITATE)
 def index():
@@ -129,6 +144,24 @@ def index():
         return jsonify(list_orders(page=page, per_page=per_page, role=current_user.role))
     except SQLAlchemyError:
         return jsonify(message="Lista comenzilor nu este disponibila momentan."), 503
+
+
+@purchase_orders_bp.get("/overdue")
+@roles_required(Role.ACHIZITII, Role.DEPOZIT, Role.CONTABILITATE)
+def overdue():
+    if set(request.args) - {"page", "per_page"} or any(len(request.args.getlist(key)) != 1 for key in request.args):
+        return jsonify(message="Parametrii permisi sunt page si per_page, o singura data fiecare."), 400
+    try:
+        page = int(request.args.get("page", "1"))
+        per_page = int(request.args.get("per_page", "20"))
+    except ValueError:
+        return jsonify(message="Paginarea trebuie sa contina numere intregi."), 400
+    if not 1 <= page <= 1000000 or not 1 <= per_page <= 100:
+        return jsonify(message="Paginare invalida: page 1-1000000, per_page 1-100."), 400
+    try:
+        return jsonify(list_overdue_items(page=page, per_page=per_page, role=current_user.role))
+    except SQLAlchemyError:
+        return jsonify(message="Lista intarzierilor nu este disponibila momentan."), 503
 
 
 @purchase_orders_bp.after_request

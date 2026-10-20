@@ -38,6 +38,9 @@ def get_config():
     )
 
     return {
+        "MAILPIT_SMTP_PORT": os.getenv("MAILPIT_SMTP_PORT", "1025"),
+        "EMAIL_DAILY_TIME": os.getenv("EMAIL_DAILY_TIME", "08:00"),
+        "EMAIL_RETRY_SECONDS": os.getenv("EMAIL_RETRY_SECONDS", "300"),
         "RATELIMIT_STORAGE_URI": "memory://",
         "RATELIMIT_HEADERS_ENABLED": True,
         "JWT_SECRET_KEY": jwt_secret,

@@ -1,6 +1,9 @@
 from flask import Flask
 
-from app.cli import create_admin_command
+from app.cli import create_admin_command, preview_overdue_emails_command
+from app.cli import send_overdue_emails_local_command, send_test_email_command
+from app.cli import list_email_deliveries_command
+from app.cli import run_notification_worker_command
 from app.config import get_config
 from app.extensions import db, jwt, limiter, migrate
 from app.jwt_callbacks import register_jwt_callbacks
@@ -11,6 +14,9 @@ from app.routes.users import users_bp
 from app.routes.suppliers import suppliers_bp
 from app.routes.products import products_bp
 from app.routes.purchase_orders import purchase_orders_bp
+from app.routes.receipts import receipts_bp
+from app.routes.stock import stock_bp
+from app.routes.invoices import invoices_bp
 
 
 def create_app():
@@ -27,5 +33,13 @@ def create_app():
     app.register_blueprint(suppliers_bp, url_prefix="/api/suppliers")
     app.register_blueprint(products_bp, url_prefix="/api/products")
     app.register_blueprint(purchase_orders_bp, url_prefix="/api/purchase-orders")
+    app.register_blueprint(receipts_bp, url_prefix="/api/receipts")
+    app.register_blueprint(stock_bp, url_prefix="/api/stock")
+    app.register_blueprint(invoices_bp, url_prefix="/api/invoices")
     app.cli.add_command(create_admin_command)
+    app.cli.add_command(preview_overdue_emails_command)
+    app.cli.add_command(send_test_email_command)
+    app.cli.add_command(send_overdue_emails_local_command)
+    app.cli.add_command(list_email_deliveries_command)
+    app.cli.add_command(run_notification_worker_command)
     return app

@@ -23,6 +23,41 @@ ENTITY_FIELDS["purchase_order_items"] = {
 }
 ENTITY_ACTIONS["purchase_orders"] = {"CREATE", "UPDATE", "CONFIRM"}
 ENTITY_ACTIONS["purchase_order_items"] = {"CREATE", "UPDATE", "DELETE"}
+ENTITY_FIELDS["receipts"] = {
+    "number": str, "supplier_id": int, "delivery_reference": str, "received_at": str,
+    "status": str, "created_by_id": int, "confirmed_by_id": (int, type(None)),
+    "confirmed_at": (str, type(None)), "version": int,
+}
+ENTITY_FIELDS["receipt_items"] = {
+    "receipt_id": int, "line_number": int, "product_id": int, "purchase_order_item_id": (int, type(None)),
+    "description": str, "unit": str, "received_quantity": str, "accepted_quantity": str,
+    "rejected_quantity": str, "pending_quantity": str,
+}
+ENTITY_ACTIONS["receipts"] = {"CREATE", "UPDATE", "CONFIRM"}
+ENTITY_ACTIONS["receipt_items"] = {"CREATE", "UPDATE"}
+ENTITY_FIELDS["stock_movements"] = {
+    "product_id": int, "receipt_item_id": int, "kind": str, "quantity_delta": str,
+    "reason": str, "created_by_id": int, "operation_key": str,
+}
+ENTITY_ACTIONS["stock_movements"] = {"CREATE"}
+ENTITY_FIELDS["email_outbox"] = {
+    "kind": str, "transport": str, "as_of": str, "recipient_user_id": int,
+    "status": str, "attempt_count": int, "last_error": (str, type(None)),
+    "next_attempt_at": (str, type(None)),
+}
+ENTITY_ACTIONS["email_outbox"] = {"ENQUEUE", "START", "SENT", "FAILED", "UNKNOWN", "SKIP"}
+ENTITY_FIELDS["invoices"] = {
+    "supplier_id": int, "series": str, "number": str, "invoice_date": str, "due_date": str,
+    "currency": str, "net_amount": str, "vat_amount": str, "total_amount": str,
+    "status": str, "created_by_id": int, "version": int,
+}
+ENTITY_FIELDS["invoice_items"] = {
+    "invoice_id": int, "line_number": int, "product_id": int, "description": str, "unit": str,
+    "quantity": str, "unit_price": str, "vat_rate": str,
+    "net_amount": str, "vat_amount": str, "total_amount": str,
+}
+ENTITY_ACTIONS["invoices"] = {"CREATE", "UPDATE"}
+ENTITY_ACTIONS["invoice_items"] = {"CREATE", "UPDATE", "DELETE"}
 
 
 def user_snapshot(user):

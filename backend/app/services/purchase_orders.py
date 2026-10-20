@@ -2,10 +2,11 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 import re
 
-from sqlalchemy import func, select
+from sqlalchemy import Date, func, select
 
 from app.extensions import db
 from app.models import Product, PurchaseOrder, PurchaseOrderItem, Role, Supplier, User
+from app.models import Receipt, ReceiptItem
 from app.services.audit import record_audit
 
 
@@ -291,6 +292,78 @@ def get_order(order_id, *, role=Role.ACHIZITII):
             item["vat_rate"] = format(item["vat_rate"], ".2f")
         result["items"].append(item)
     return result
+
+
+def accepted_quantities_subquery():
+    return (
+        select(ReceiptItem.purchase_order_item_id.label("order_item_id"),
+               func.sum(ReceiptItem.accepted_quantity).label("accepted_quantity"))
+        .join(Receipt, Receipt.id == ReceiptItem.receipt_id)
+        .where(Receipt.status == "CONFIRMED")
+        .group_by(ReceiptItem.purchase_order_item_id)
+        .subquery()
+    )
+
+
+def get_order_delivery(order_id, *, role=Role.ACHIZITII):
+    order = get_order(order_id, role=role)
+    accepted_totals = accepted_quantities_subquery()
+    rows = db.session.execute(
+        select(PurchaseOrderItem.id, func.coalesce(accepted_totals.c.accepted_quantity, 0))
+        .outerjoin(accepted_totals, accepted_totals.c.order_item_id == PurchaseOrderItem.id)
+        .where(PurchaseOrderItem.purchase_order_id == order_id)
+    )
+    accepted_by_line = dict(rows.all())
+    items = []
+    for item in order["items"]:
+        ordered = Decimal(item["quantity"])
+        accepted = accepted_by_line.get(item["id"], Decimal("0"))
+        remaining = ordered - accepted
+        status = "NOT_RECEIVED" if accepted == 0 else "PARTIAL" if remaining > 0 else "COMPLETE"
+        items.append({key: item[key] for key in (
+            "id", "line_number", "product_id", "description", "unit", "quantity", "expected_date",
+        )})
+        items[-1].update(accepted_quantity=format(accepted, ".3f"), remaining_quantity=format(remaining, ".3f"), delivery_status=status)
+    return {"id": order["id"], "number": order["number"], "status": order["status"], "items": items}
+
+
+def bucharest_date(moment=None):
+    return db.session.scalar(select(func.timezone("Europe/Bucharest", moment if moment is not None else func.now()).cast(Date)))
+
+
+def overdue_items_query(today, *, role=Role.ACHIZITII):
+    conditions = visible_orders(role)
+    accepted_totals = accepted_quantities_subquery()
+    accepted = func.coalesce(accepted_totals.c.accepted_quantity, 0)
+    remaining = PurchaseOrderItem.quantity - accepted
+    return (
+        select(PurchaseOrder.id.label("order_id"), PurchaseOrder.number.label("order_number"), PurchaseOrder.supplier_id,
+               PurchaseOrderItem.id, PurchaseOrderItem.line_number, PurchaseOrderItem.product_id,
+               PurchaseOrderItem.description, PurchaseOrderItem.unit, PurchaseOrderItem.quantity, PurchaseOrderItem.expected_date,
+               accepted.label("accepted_quantity"), remaining.label("remaining_quantity"))
+        .join(PurchaseOrderItem, PurchaseOrderItem.purchase_order_id == PurchaseOrder.id)
+        .outerjoin(accepted_totals, accepted_totals.c.order_item_id == PurchaseOrderItem.id)
+        .where(*conditions, PurchaseOrder.status == "CONFIRMED", PurchaseOrder.confirmed_at.is_not(None),
+               PurchaseOrderItem.expected_date < today, remaining > 0)
+    )
+
+
+def list_overdue_items(*, page, per_page, role=Role.ACHIZITII):
+    today = bucharest_date()
+    query = overdue_items_query(today, role=role)
+    total = db.session.scalar(select(func.count()).select_from(query.subquery()))
+    rows = db.session.execute(query.order_by(PurchaseOrderItem.expected_date, PurchaseOrder.id, PurchaseOrderItem.line_number)
+                              .offset((page - 1) * per_page).limit(per_page))
+    items = []
+    for row in rows:
+        item = dict(row._mapping)
+        item["days_overdue"] = (today - row.expected_date).days
+        item["expected_date"] = row.expected_date.isoformat()
+        for key in ("quantity", "accepted_quantity", "remaining_quantity"):
+            item[key] = format(item[key], ".3f")
+        items.append(item)
+    return {"items": items, "page": page, "per_page": per_page, "total": total,
+            "as_of": today.isoformat(), "timezone": "Europe/Bucharest"}
 
 
 def list_orders(*, page, per_page, role=Role.ACHIZITII):

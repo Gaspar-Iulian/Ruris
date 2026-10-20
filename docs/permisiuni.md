@@ -29,8 +29,16 @@ JWT identifica utilizatorul; un camp role din token nu acorda drepturi.
 | POST /api/purchase-orders | Doar ACHIZITII, cu sesiune valida si CSRF; creeaza ciorne |
 | GET /api/purchase-orders | ACHIZITII vede toate; DEPOZIT si CONTABILITATE doar confirmate/inchise cu data confirmarii |
 | GET /api/purchase-orders/<id> | Aceeasi vizibilitate ca lista; DEPOZIT fara preturi, TVA si moneda |
+| GET /api/purchase-orders/<id>/delivery | Aceeasi vizibilitate ca detaliul; cantitati comandate, acceptate si rest de livrat, fara preturi |
+| GET /api/purchase-orders/overdue | ACHIZITII, DEPOZIT si CONTABILITATE; pozitii intarziate din comenzi confirmate deschise, fara preturi |
 | PATCH /api/purchase-orders/<id> | Doar ACHIZITII, cu CSRF, motiv si versiune; editare ciorna |
 | POST /api/purchase-orders/<id>/confirm | Doar ACHIZITII, cu CSRF si versiune; confirma ciorna valida |
+| POST /api/receipts | Doar DEPOZIT, cu sesiune si CSRF; ciorna din comanda confirmata |
+| GET /api/receipts | DEPOZIT vede toate; ACHIZITII si CONTABILITATE doar confirmate cu data si autor de confirmare |
+| GET /api/receipts/<id> | Aceeasi vizibilitate ca lista; antet si cantitati, fara preturi |
+| PATCH /api/receipts/<id> | Doar DEPOZIT, cu CSRF, motiv si versiune; corecteaza antetul si cantitatile ciornei |
+| POST /api/receipts/<id>/confirm | Doar DEPOZIT, cu CSRF, motiv si versiune; clasifica marfa si adauga intrarile acceptate |
+| GET /api/stock | ACHIZITII, DEPOZIT si CONTABILITATE; cantitati disponibile, fara preturi |
 
 `roles_required()` autentifica cererea si verifica rolurile declarate explicit.
 O lista de roluri goala sau un rol necunoscut produce eroare la configurarea rutei.
@@ -59,13 +67,20 @@ Raspunsul include users si pagination: page, per_page, total, pages.
 O pagina dupa sfarsitul listei returneaza users gol, cu totalul pastrat.
 Raspunsurile au Cache-Control: no-store.
 
+## Facturi in ciorna
+
+POST /api/invoices, GET /api/invoices si GET /api/invoices/{id} sunt disponibile
+exclusiv rolului CONTABILITATE. Inclusiv ADMIN primeste 403.
+Crearea si PATCH /api/invoices/{id} necesita JWT valid si protectie CSRF.
+Editarea este permisa numai in DRAFT, cu version si reason obligatorii.
+Nu exista inca verificare, aprobare sau plata. Celelalte echipe nu pot consulta ciornele facturilor.
+
 ## Matricea pentru modulele viitoare
 
 Aceste operatii nu sunt implementate inca. Matricea ghideaza construirea lor.
 
 | Operatie | Rol care modifica | Informatii necesare altor echipe |
 | --- | --- | --- |
-| Confirmare receptie | DEPOZIT | Achizitiile si contabilitatea vad cantitatile acceptate si diferentele relevante |
 | Iesire, retur, ajustare de stoc | DEPOZIT | Achizitiile si contabilitatea vad efectele relevante propriului flux |
 | Inregistrare si verificare factura | CONTABILITATE | Achizitiile vad diferentele pentru care trebuie sa discute cu furnizorul |
 | Aprobare factura si evidenta platii | CONTABILITATE | Acces limitat la starea necesara fluxului |

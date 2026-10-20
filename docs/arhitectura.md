@@ -89,8 +89,14 @@ JWT identifica utilizatorul; backendul verifica drepturile lui.
 ## Integrari ulterioare
 
 - Cursuri BNR pentru conversia EUR in RON.
-- SMTP pentru emailuri.
-- Celery, Redis si un singur Celery Beat pentru sarcini periodice.
+- SMTP extern pentru emailuri; transportul local de test prin Mailpit este implementat.
+- Celery, Redis si Celery Beat raman o optiune pentru extinderea executiei sarcinilor.
+
+Pentru etapa locala este implementat workerul CLI `run-notification-worker`,
+separat de procesul HTTP. Verifica ora Europe/Bucharest, ruleaza sumarul zilnic
+si respecta next_attempt_at din PostgreSQL pentru reincercari. Nu porneste automat
+din create_app() si nu necesita dependinte suplimentare. In productie va necesita
+un manager de procese sau un container dedicat, pentru a ramane pornit.
 
 Sarcinile periodice ruleaza separat de cererile utilizatorilor.
 Emailurile au istoric, reincercare la eroare si protectie impotriva duplicatelor.

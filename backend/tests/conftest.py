@@ -37,6 +37,12 @@ def session():
                         "0004_romanian_roles.py", "0005_suppliers.py",
                         "0006_products.py",
                         "0007_purchase_orders.py",
+                        "0008_receipts.py",
+                        "0009_stock_movements.py",
+                        "0010_email_delivery.py",
+                        "0011_email_retry_schedule.py",
+                        "0012_invoice_drafts_add_invoice_drafts.py",
+                        "0013_invoice_line_order.py",
                     ):
                         spec = importlib.util.spec_from_file_location(filename[:-3], migrations / filename)
                         migration = importlib.util.module_from_spec(spec)
