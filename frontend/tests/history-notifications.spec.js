@@ -45,7 +45,7 @@ test('order history loads on request and displays changes with pagination', asyn
   await history.getByRole('button', { name: 'Istoric', exact: true }).click();
   await expect(history).toContainText('Responsabil achiziții');
   await history.getByText('Modificări', { exact: true }).click();
-  await expect(history).toContainText('4,000 → 6,000');
+  await expect(history).toContainText('4 → 6');
   await expect(history).toContainText('2,0000 → 3,0000');
   await history.getByRole('button', { name: 'Mai vechi', exact: true }).click();
   await expect(history).toContainText('Pagina 2 din 2');
@@ -119,3 +119,17 @@ test('session expiry while reading notifications removes protected content', asy
   await expect(page.getByRole('heading', { name: 'Intră în contul tău', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Jurnal notificări' })).toHaveCount(0);
 });
+
+for (const role of ['ACHIZITII', 'DEPOZIT', 'CONTABILITATE']) {
+  test(`empty clarifications show the current receipt state and link to message history for ${role}`, async ({ page }) => {
+    const { requests } = await portal(page, role);
+    await page.getByRole('navigation').getByRole('button', { name: 'Clarificări', exact: true }).click();
+    await expect(page.getByText('Nu există recepții cu marfă în așteptare.', { exact: true })).toBeVisible();
+    await expect(page.getByText('0 recepții cu marfă în așteptare', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Vezi notificările', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Jurnal notificări' })).toBeVisible();
+    await page.locator('.notification-entry summary').click();
+    await expect(page.locator('.notification-content pre')).toContainText('Marfă în așteptare: 10.000 BUC');
+    expect(requests).toContain('/api/notifications');
+  });
+}

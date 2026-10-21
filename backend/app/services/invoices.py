@@ -5,7 +5,7 @@ import re
 from sqlalchemy import func, select
 
 from app.extensions import db
-from app.models import Invoice, InvoiceAllocation, InvoiceIssue, InvoiceItem, PurchaseOrder, PurchaseOrderItem, Role, User
+from app.models import Invoice, InvoiceAllocation, InvoiceIssue, InvoiceItem, PurchaseOrder, PurchaseOrderItem, Role, Supplier, User
 from app.services.invoice_issues import invalidate_verification
 from app.services.audit import record_audit
 from app.services.purchase_orders import decimal_value, lock_catalog, positive_id
@@ -313,7 +313,18 @@ def create_invoice(*, actor_user_id, supplier_id, series, number, invoice_date, 
 
 def list_invoices(*, page, per_page):
     invoices = db.session.scalars(select(Invoice).order_by(Invoice.id.desc()).offset((page - 1) * per_page).limit(per_page)).all()
-    return {"invoices": [invoice_data(invoice, include_items=False) for invoice in invoices],
+    suppliers = dict(db.session.execute(select(Supplier.id, Supplier.name)
+        .where(Supplier.id.in_({invoice.supplier_id for invoice in invoices}))).all())
+    orders = dict(db.session.execute(select(PurchaseOrderItem.id, PurchaseOrder.number)
+        .join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderItem.purchase_order_id)
+        .where(PurchaseOrderItem.id.in_({item.purchase_order_item_id for invoice in invoices for item in invoice.items
+                                       if item.purchase_order_item_id is not None}))).all())
+    summaries = []
+    for invoice in invoices:
+        summary = {**invoice_data(invoice, include_items=False), "supplier_name": suppliers[invoice.supplier_id]}
+        summary["line_items"] = [{**item_data(item), "order_number": orders.get(item.purchase_order_item_id)} for item in invoice.items]
+        summaries.append(summary)
+    return {"invoices": summaries,
             "total": db.session.scalar(select(func.count()).select_from(Invoice)), "page": page, "per_page": per_page}
 
 

@@ -27,6 +27,7 @@ instance/
 *.sqlite
 *.sqlite3
 uploads/
+backups/
 *.log
 
 # Editor and system

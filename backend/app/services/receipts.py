@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import re
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import raiseload
 
 from app.extensions import db
@@ -311,6 +311,21 @@ def list_receipts(*, page, per_page, role=Role.DEPOZIT, pending_only=False):
         .group_by(ReceiptItem.receipt_id)).all())
     suppliers = dict(db.session.execute(select(Supplier.id, Supplier.name)
         .where(Supplier.id.in_({receipt.supplier_id for receipt in receipts}))).all())
+    lines = {receipt.id: [] for receipt in receipts}
+    orders = {}
+    sources = db.session.execute(select(func.coalesce(ReceiptItem.origin_item_id, ReceiptItem.id), PurchaseOrder.number)
+        .join(PurchaseOrderItem, or_(PurchaseOrderItem.id == ReceiptItem.purchase_order_item_id,
+                                    PurchaseOrderItem.id == ReceiptItem.pending_order_item_id))
+        .join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderItem.purchase_order_id)
+        .where(ReceiptItem.receipt_id.in_(lines)).order_by(PurchaseOrder.id))
+    for root_id, order_number in sources:
+        orders.setdefault(root_id, {})[order_number] = None
+    rows = db.session.scalars(select(ReceiptItem)
+        .where(ReceiptItem.receipt_id.in_(lines), ReceiptItem.origin_item_id.is_(None))
+        .order_by(ReceiptItem.receipt_id, ReceiptItem.line_number))
+    for item in rows:
+        lines[item.receipt_id].append({**receipt_item_data(item), "order_number": " / ".join(orders.get(item.id, {})) or None,
+            "total_accepted_quantity": format(item.accepted_quantity + item.resolved_quantity, ".3f")})
     return {"receipts": [{**receipt_data(receipt, include_items=False), "supplier_name": suppliers[receipt.supplier_id],
-                           "pending_count": pending.get(receipt.id, 0)} for receipt in receipts], "page": page, "per_page": per_page,
+                           "pending_count": pending.get(receipt.id, 0), "line_items": lines[receipt.id]} for receipt in receipts], "page": page, "per_page": per_page,
             "total": db.session.scalar(select(func.count()).select_from(Receipt).where(*conditions))}

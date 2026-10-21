@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, CircleAlert, LoaderCircle, Plus, Save, Trash2 } from 'lucide-react';
 import { api } from './api.js';
+import { quantityText } from './receiptQuantities.js';
 import DeclaredTotals, { emptyTotals, readTotals } from './DeclaredTotals.jsx';
+import AmountsPreview, { LineAmounts } from './AmountsPreview.jsx';
+import { calculateTotals } from './amounts.js';
+import InvoiceSourceNotice from './InvoiceSourceNotice.jsx';
+import ExistingOrderInvoices from './ExistingOrderInvoices.jsx';
 
 const newLine = () => ({ key: crypto.randomUUID(), product_id: '', quantity: '1', unit_price: '', vat_rate: '0' });
 
@@ -34,7 +39,7 @@ export default function InvoiceForm({ onExpired, onCancel, onCreated, initialInv
   const [dueDate, setDueDate] = useState(initialInvoice?.due_date || '');
   const [currency, setCurrency] = useState(initialInvoice?.currency || 'RON');
   const [declaredTotals, setDeclaredTotals] = useState(() => initialInvoice?.declared_totals || emptyTotals());
-  const [lines, setLines] = useState(() => initialInvoice ? initialInvoice.items.map((item) => ({ ...newLine(), ...item, product_id: String(item.product_id) })) : []);
+  const [lines, setLines] = useState(() => initialInvoice ? initialInvoice.items.map((item) => ({ ...newLine(), ...item, quantity: quantityText(item.quantity, '.'), product_id: String(item.product_id) })) : []);
   const [reason, setReason] = useState('');
   const [choices, setChoices] = useState({ loading: true, suppliers: [], products: [], orders: [] });
   const [attempt, setAttempt] = useState(0);
@@ -64,8 +69,8 @@ export default function InvoiceForm({ onExpired, onCancel, onCreated, initialInv
     api(`/purchase-orders/${orderId}/invoicing`, { signal: controller.signal }).then(({ order }) => {
       if (controller.signal.aborted) return;
       setSource({ id: orderId, order }); setSupplierId(String(order.supplier_id)); setCurrency(order.currency);
-      setLines(order.items.map((item) => ({ ...newLine(), product_id: String(item.product_id), quantity: item.quantity,
-        unit_price: item.unit_price, vat_rate: item.vat_rate, purchase_order_item_id: item.id, source: item })));
+      setLines(order.items.map((item) => ({ ...newLine(), product_id: String(item.product_id), quantity: quantityText(item.remaining_to_invoice ?? item.quantity, '.'),
+        unit_price: item.unit_price, vat_rate: item.vat_rate, purchase_order_item_id: item.id, source: { ...item, currency: order.currency } })));
     }).catch((failure) => {
       if (controller.signal.aborted || failure.name === 'AbortError') return;
       if ([401, 422].includes(failure.status)) onExpired();
@@ -146,6 +151,7 @@ export default function InvoiceForm({ onExpired, onCancel, onCreated, initialInv
         {mode === 'order' && <div className="form-field"><label htmlFor="invoice-order">Comandă</label><select id="invoice-order" required value={orderId} onChange={(event) => setOrderId(event.target.value)}><option value="">Selectează comanda</option>{choices.orders.map((order) => <option key={order.id} value={order.id}>{order.number}</option>)}</select></div>}
       </div>{mode === 'order' && !choices.orders.length && <div className="notice" role="status">Nu există comenzi confirmate. Poți folosi introducerea manuală.</div>}
       {mode === 'order' && orderId && (source?.error ? <div className="catalog-error"><p role="alert">{source.error}</p><button type="button" className="button button-secondary" onClick={() => setSourceAttempt((value) => value + 1)}>Reîncarcă comanda</button></div> : needsOrder ? <p className="order-empty" role="status">Se încarcă pozițiile…</p> : null)}
+      {mode === 'order' && source?.id === orderId && source.order && <ExistingOrderInvoices order={source.order} />}
       </section>}
       <section className="panel order-header"><h2>Detalii factură</h2><div className="invoice-header-grid">
         <div className="form-field"><label htmlFor="invoice-supplier">Furnizor</label><select id="invoice-supplier" required disabled={mode === 'order'} value={supplierId} onChange={(event) => setSupplierId(event.target.value)}><option value="">Selectează furnizorul</option>{choices.suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select></div>
@@ -157,13 +163,15 @@ export default function InvoiceForm({ onExpired, onCancel, onCreated, initialInv
       </div></section>
       {editing && <div className="form-field invoice-edit-reason"><label htmlFor="invoice-edit-reason">Motivul corectării</label><input id="invoice-edit-reason" required maxLength={1000} value={reason} onChange={(event) => setReason(event.target.value)} /></div>}
       <section className="panel order-lines"><div className="panel-heading"><h2>Produse <span className="line-count">{lines.length}</span></h2><button type="button" className="button button-secondary" disabled={lines.length >= 100} onClick={() => setLines((current) => [...current, newLine()])}><Plus size={16} />Adaugă produs</button></div>
+        <p className="form-section-hint">Prețurile unitare sunt fără TVA.</p>
         {!lines.length && <p className="order-empty">Niciun produs adăugat.</p>}
         {lines.map((line, index) => <div className="order-line" key={line.key}><div className="order-line-heading"><strong>Poziția {index + 1}</strong><button type="button" className="icon-button" aria-label={`Elimină produsul ${index + 1}`} onClick={() => setLines((current) => current.filter((item) => item.key !== line.key))}><Trash2 size={16} /></button></div><div className="invoice-line-grid">
           <div className="form-field"><label htmlFor={`${line.key}-product`}>Produs {index + 1}</label><select id={`${line.key}-product`} required value={line.product_id} onChange={(event) => changeLine(line.key, 'product_id', event.target.value)}><option value="">Selectează produsul</option>{choices.products.map((product) => <option key={product.id} value={product.id}>{product.sku} · {product.name} ({product.unit})</option>)}</select></div>
           {[['quantity', 'Cantitate', 19], ['unit_price', 'Preț unitar', 19], ['vat_rate', 'TVA (%)', 6]].map(([field, label, limit]) => <div className="form-field" key={field}><label htmlFor={`${line.key}-${field}`}>{label} {index + 1}</label><input id={`${line.key}-${field}`} required inputMode="decimal" maxLength={limit} value={line[field]} onChange={(event) => changeLine(line.key, field, event.target.value)} /></div>)}
-        </div>{line.source && <p className="invoice-source-quantities">Comandat: {line.source.quantity.replace('.', ',')} {line.source.unit} · Acceptat: {line.source.accepted_quantity.replace('.', ',')} · Asociat facturilor: {line.source.allocated_quantity.replace('.', ',')} · Disponibil de asociat: {line.source.available_quantity.replace('.', ',')}</p>}</div>)}
+        </div><LineAmounts line={line} currency={currency} />{line.source && <p className="invoice-source-quantities">Comandat: {quantityText(line.source.quantity)} {line.source.unit} · Acceptat: {quantityText(line.source.accepted_quantity)} · Asociat facturilor: {quantityText(line.source.allocated_quantity)} · Disponibil de asociat: {quantityText(line.source.available_quantity)}</p>}<InvoiceSourceNotice line={line} currency={currency} /></div>)}
       </section>
-      <DeclaredTotals values={declaredTotals} onChange={setDeclaredTotals} currency={currency} />
+      <AmountsPreview lines={lines} currency={currency} title="Total calculat din poziții" />
+      <DeclaredTotals values={declaredTotals} onChange={setDeclaredTotals} currency={currency} calculated={calculateTotals(lines)} />
     </fieldset>
     <div className="order-form-footer"><button type="button" className="button button-secondary" disabled={saving} onClick={onCancel}><ArrowLeft size={16} />{uncertain ? 'Vezi facturile' : 'Anulează'}</button><button type="submit" className="button button-primary" disabled={saving || uncertain || noCatalog || needsOrder || !lines.length}>{saving ? <LoaderCircle className="spin" size={17} /> : <Save size={17} />}{saving ? 'Se salvează…' : editing ? 'Salvează modificările' : 'Salvează ciorna'}</button></div>
   </form>;

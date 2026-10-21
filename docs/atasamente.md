@@ -86,7 +86,7 @@ neconfirmată. Un rezultat incert la modificare cere reîncărcarea documentului
 
 ## Stocare și integritate
 
-Implicit, fișierele sunt păstrate în `backend/instance/attachments`, în afara
+Implicit, fișierele sunt păstrate în `instance/attachments`, în afara
 folderului public. `ATTACHMENT_STORAGE_PATH` poate indica alt director persistent;
 o valoare goală păstrează locația implicită. Directorul trebuie să fie accesibil
 procesului backend. Fișierele și configurația locală sunt excluse din Git.

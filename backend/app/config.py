@@ -27,6 +27,9 @@ def get_config():
         raise RuntimeError("JWT_ACCESS_TOKEN_MINUTES trebuie sa fie un numar intreg intre 1 si 60.") from None
     if not 1 <= token_minutes <= 60:
         raise RuntimeError("JWT_ACCESS_TOKEN_MINUTES trebuie sa fie intre 1 si 60.")
+    behind_proxy = os.getenv("BEHIND_PROXY", "false").lower()
+    if behind_proxy not in {"true", "false"}:
+        raise RuntimeError("BEHIND_PROXY trebuie sa fie true sau false.")
 
     database_url = URL.create(
         drivername="postgresql+psycopg",
@@ -38,6 +41,7 @@ def get_config():
     )
 
     return {
+        "BEHIND_PROXY": behind_proxy == "true",
         "ATTACHMENT_STORAGE_PATH": os.getenv("ATTACHMENT_STORAGE_PATH") or str(project_root / "instance" / "attachments"),
         "MAIL_TRANSPORT": os.getenv("MAIL_TRANSPORT", "LOCAL_MAILPIT"),
         "MAILPIT_SMTP_HOST": os.getenv("MAILPIT_SMTP_HOST", "127.0.0.1"),

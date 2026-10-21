@@ -14,8 +14,9 @@ marfă acceptată și corespunde condițiilor comenzii. Întârzierile și bloca
 trebuie să ajungă la persoanele responsabile, iar operațiile să poată fi urmărite.
 
 Tehnologii folosite: Python, Flask, SQLAlchemy, PostgreSQL, React, bcrypt și JWT.
-Docker pornește PostgreSQL și Mailpit; profilul `notifications` adaugă migrarea
-și workerul permanent. Backendul web și frontendul pornesc momentan separat.
+Profilul Docker `app` pornește întregul portal: Nginx/React, Flask/Gunicorn,
+PostgreSQL, migrarea și workerul permanent, cu volume pentru bază și documente.
+Există proceduri verificate de backup și restaurare, descrise în [ghidul Docker](docker.md).
 
 ## 2. Ce avem implementat
 
@@ -233,8 +234,14 @@ concurența și anularea la eșec sunt verificate și în testele backend.
    verificare, aprobare și plată. Accesul altor echipe la acest istoric este refuzat.
 3. Din contul unei echipe, deschide **Notificări**. Vezi numai mesajele contului
    tău și tipurile compatibile cu rolul actual, cu încercări și starea livrării.
-4. Pentru testarea emailurilor locale, consultă Mailpit la <http://127.0.0.1:8025>.
+4. Emailurile aplicației se consultă în Mailpit la <http://127.0.0.1:8025>;
+   testele automate folosesc un inbox separat la <http://127.0.0.1:8026>, cu prefix `[TEST]`.
    Configurația și comenzile de previzualizare/procesare sunt în README.
+
+Pagina **Clarificări** arată recepțiile cu marfă încă în așteptare. După
+rezolvare, acestea dispar din lista activă. Emailurile trimise se păstrează în
+**Notificări**, pentru contul destinatar. O pagină Clarificări goală nu implică
+ștergerea istoricului mesajelor. Butonul **Vezi notificările** leagă cele două pagini.
 
 ### Responsabilitatea clarificărilor
 
@@ -354,7 +361,7 @@ Nu există înlocuire în loc sau ștergere.
   consultarea situației curente; fișierele cu un commit incert nu sunt șterse automat.
 
 Migrarea este `0024_document_attachments`. Fișierele sunt implicit în
-`backend/instance/attachments`, excluse din Git și păstrate între reporniri.
+`instance/attachments`, excluse din Git și păstrate între reporniri.
 Comanda `flask --app app check-attachments` verifică integritatea și raportează
 fișiere neasociate sau temporare, fără modificări.
 Pentru mutare sunt necesare împreună baza și directorul de fișiere.
@@ -391,15 +398,85 @@ Regulile API, stocarea și backupul sunt descrise în [ghidul atașamentelor](at
 - Tranzacția SQL păstrează împreună metadatele, versiunea și auditul. Fișierele
   se scriu separat; eșecurile cunoscute și commiturile incerte au tratamente distincte.
 
+### Liste detaliate în portal
+
+- Recepțiile afișează fiecare produs, comenzile asociate, unitatea și cantitățile
+  sosite, acceptate, respinse și în așteptare. Acceptările ulterioare sunt reunite
+  pe poziția inițială, fără dublarea cantității sosite.
+- Clarificările afișează numai pozițiile cu marfă rămasă în așteptare.
+- Facturile afișează numele furnizorului, produsele, comenzile asociate, cantitățile,
+  prețurile, TVA, totalul fiecărei poziții, totalul documentului și scadența.
+- Întârzierile includ furnizorul și balanța comandat / acceptat / rest, cu unitatea.
+- Furnizorii includ codul fiscal și emailul pentru Achiziții și Contabilitate.
+  Depozitul păstrează proiecția operațională existentă.
+- API-ul încarcă datele pozițiilor pentru documentele paginii curente;
+  paginarea continuă să numere documente, nu rândurile produselor.
+- Cantitățile din portal ascund zerourile zecimale inutile: `5.000` devine `5`,
+  `5.500` devine `5,5`. Formatarea folosește texte, fără rotunjire sau modificarea
+  preciziei din baza de date; prețurile și sumele păstrează formatul monetar.
+
+### Informații utile înainte de salvare
+
+- Comenzile și facturile arată netul, TVA și totalul pe poziție și pe document,
+  actualizate la modificarea cantității, prețului sau cotei TVA.
+- Previzualizarea folosește `BigInt` și rotunjire pe fiecare poziție, la fel ca
+  backendul. Pozițiile incomplete sau sumele peste limita permisă nu produc
+  un total parțial prezentat drept total al documentului.
+- Sumele de pe factura furnizorului rămân introduse independent. Formularul
+  arată diferențele de net, TVA și total și verifică egalitatea net + TVA = total.
+- La facturarea din comandă apar condițiile comerciale inițiale și avertizări
+  pentru diferențe sau cantități fără marfă disponibilă pentru asociere.
+- Recepția arată surplusul față de restul comenzii; confirmarea arată imediat
+  cât mai este de repartizat sau cu cât se depășește cantitatea sosită.
+- Detaliile documentului includ furnizorul, datele relevante și referința avizului.
+  Valorile comenzilor sunt afișate doar pentru Achiziții și Contabilitate.
+
+Verificări: suita UI de 138 de teste a fost parcursă; cazul de accesibilitate
+corectat și celelalte verificări afectate au trecut la rerulare. Trei fluxuri
+reale au trecut: recepția 77 + 23 cu facturare și plată, corectarea totalurilor
+furnizorului și surplusul acoperit de o comandă suplimentară. Totalurile din
+formular au fost comparate cu valorile calculate de backend la salvare.
+
+### Facturi multiple pentru aceeași comandă
+
+- Formularul arată facturile existente legate de comandă, cu starea și
+  cantitățile înregistrate. Include și legăturile cunoscute prin recepții pentru
+  facturile introduse manual, cu cantitatea efectiv asociată.
+- Cantitatea propusă este restul comenzii neînregistrat pe facturi, în locul
+  cantității integrale. Ciornele și facturile blocate sunt incluse în evidență.
+  Dacă restul este zero, formularul propune zero și cere o cantitate pozitivă
+  pentru salvare; depășirea manuală afișează avertizarea de posibil duplicat.
+- Înregistrarea unui document distinct primit de la furnizor rămâne posibilă,
+  inclusiv dacă este greșit. Verificarea și aprobarea cer cantități acoperite
+  integral de recepții acceptate, fără reutilizarea cantităților deja asociate.
+- Nu există regula „o singură factură pentru fiecare comandă”: facturile pentru
+  tranșe diferite sunt valide. Duplicarea aceleiași referințe de factură la același
+  furnizor este interzisă separat de baza de date.
+
+### Pachet Docker complet
+
+- Profilul `app` a fost pornit pe volume goale, cu migrare automată, React/Nginx,
+  Flask/Gunicorn și worker permanent. Imaginile folosesc utilizatori fără root
+  pentru procesele web și dependințe Python fixate în lockfile.
+- Au trecut 22 de verificări backend pentru configurarea proxy-ului, disponibilitate
+  și cookie-uri/JWT. Două fluxuri browser au trecut direct prin containere:
+  recepție cu document și comanda 100 → recepții 77 + 23 → factură → plată.
+- Backupul bazei și fișierelor a fost restaurat într-un proiect separat, cu alt
+  utilizator PostgreSQL. Testul browser a confirmat conturile, stocul, factura
+  plătită și conținutul SHA-256 al documentului descărcat.
+- Backupul corupt și destinația cu fișiere existente au fost respinse înainte
+  de suprascriere. Datele și fișierele proiectului principal au fost păstrate;
+  cele două atașamente locale au fost copiate și verificate în volumul Docker.
+- Portalul principal folosește acum `http://127.0.0.1:8080`. Instrucțiunile sunt
+  în [docker.md](docker.md), inclusiv importul documentelor locale și restaurarea.
+
 ## 9. Pachetele următoare, în ordinea propusă
 
-1. **Docker și livrare:** backendul și frontendul în containere, volum persistent
-   pentru fișiere, configurare exemplu, creare administrator și demonstrație pe
-   mediu curat, inclusiv backup/restaurare pentru bază și documente.
-2. **Evidența completă a stocului:** ieșiri, retururi și ajustări, cu reguli explicite
+1. **Acceptanță și livrare:** revizuirea scenariilor cerute, documentarea limitărilor
+   asumate și checkpoint Git la cererea utilizatorului. Pachetul Docker este implementat.
+2. **Evidența completă a stocului, ca extindere:** ieșiri, retururi și ajustări, cu reguli explicite
    pentru efectele asupra recepțiilor și facturilor deja asociate.
-3. **Acceptanță finală:** scenariile cerute și testele relevante, lista limitărilor
-   asumate și checkpoint Git la cererea utilizatorului.
+3. **Demonstrație finală:** prezentarea aplicației și a deciziilor tehnice pentru interviu.
 
 ## 10. Cum continuăm lucrul
 

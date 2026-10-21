@@ -116,6 +116,13 @@ def test_surplus_uses_supplementary_order_without_changing_initial_acceptance(se
     assert item["acceptances"][0]["purchase_order_item_id"] == second["items"][0]["id"]
     client, _ = authorize(data["users"][Role.DEPOZIT])
     assert client.get("/api/stock").json["stock"][0]["quantity"] == "14.000"
+    summary = client.get("/api/receipts").json["receipts"][0]
+    assert len(summary["line_items"]) == 1
+    line = summary["line_items"][0]
+    assert line["received_quantity"] == line["total_accepted_quantity"] == "14.000"
+    assert line["pending_quantity"] == "0.000"
+    assert line["order_number"] == f"{data['order']['number']} / {second['number']}"
+    assert "unit_price" not in line
     for order in (data["order"], second):
         assert client.get(f"/api/purchase-orders/{order['id']}/delivery").json["delivery"]["delivery_status"] == "COMPLETE"
 
@@ -128,6 +135,9 @@ def test_blocked_invoice_becomes_verifiable_only_after_acceptance_and_allocation
             "quantity": "6", "unit_price": "2", "vat_rate": "0"}])
     client, headers = authorize(data["users"][Role.CONTABILITATE])
     url = f"/api/invoices/{invoice['id']}"
+    summary = client.get("/api/invoices").json["invoices"][0]
+    assert summary["supplier_name"] == "Furnizor clarificari"
+    assert summary["line_items"][0]["order_number"] == data["order"]["number"]
     assert client.post(url + "/verify", headers=headers, json={"version": 1}).json["invoice"]["status"] == "BLOCKED"
     assert client.get(url + "/matching").json["items"][0]["candidates"] == []
     receipt = operation(data, receipt, "clarify").json["receipt"]

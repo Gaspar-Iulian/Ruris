@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, CircleAlert, LoaderCircle, Save } from 'lucide-react';
 import { api } from './api.js';
+import { quantityText } from './receiptQuantities.js';
+import { DeliveryQuantityHint } from './ReceiptBalance.jsx';
 import UnorderedReceiptForm from './UnorderedReceiptForm.jsx';
 
 function localNow() {
@@ -120,10 +122,10 @@ function OrderedReceiptForm({ onExpired, onCancel, onCreated, onBusyChange }) {
         <div className="form-field"><label htmlFor="receipt-reference">Document de livrare</label><input id="receipt-reference" required maxLength={120} value={reference} onChange={(event) => setReference(event.target.value)} /></div>
         <div className="form-field"><label htmlFor="receipt-date">Data și ora recepției</label><input id="receipt-date" type="datetime-local" required value={receivedAt} onChange={(event) => setReceivedAt(event.target.value)} /><small className="field-hint">Ora locală a browserului.</small></div>
       </div></section>
-      {orderId && <section className="panel order-lines"><div className="panel-heading"><h2>Produse sosite</h2></div>
+      {orderId && <section className="panel order-lines"><div className="panel-heading"><h2>Produse sosite</h2>{choices.orders.find((item) => String(item.id) === orderId)?.supplier_name && <p>{choices.orders.find((item) => String(item.id) === orderId).supplier_name}</p>}</div>
         {source?.orderId === orderId && source.error ? <div className="catalog-error"><p role="alert">{source.error}</p><button type="button" className="button button-secondary" onClick={() => setSourceAttempt((value) => value + 1)}>Reîncarcă produsele</button></div> : !order ? <div className="feedback" role="status">Se încarcă produsele…</div> : order.status !== 'CONFIRMED' ? <p className="order-empty" role="alert">Comanda nu mai este deschisă pentru recepție.</p> : <>
           <p className="receipt-hint">Completează doar cantitățile sosite. Ciorna nu modifică stocul.</p>
-          {order.items.map((line) => <div className="order-line receipt-line" key={line.id}><div><strong>{line.line_number}. {line.description}</strong><p>Comandat: {line.quantity.replace('.', ',')} {line.unit} · Rest de livrat: {line.remaining_quantity.replace('.', ',')} {line.unit}</p></div><div className="form-field"><label htmlFor={`received-${line.id}`}>Cantitate sosită {line.line_number}</label><input id={`received-${line.id}`} inputMode="decimal" autoComplete="off" maxLength={19} value={quantities[line.id] || ''} onChange={(event) => setQuantities((current) => ({ ...current, [line.id]: event.target.value }))} /></div></div>)}
+          {order.items.map((line) => <div className="order-line receipt-line" key={line.id}><div><strong>{line.line_number}. {line.description}</strong><p>Comandat: {quantityText(line.quantity)} {line.unit} · Rest de livrat: {quantityText(line.remaining_quantity)} {line.unit}</p></div><div className="form-field"><label htmlFor={`received-${line.id}`}>Cantitate sosită {line.line_number}</label><input id={`received-${line.id}`} inputMode="decimal" autoComplete="off" maxLength={19} value={quantities[line.id] || ''} onChange={(event) => setQuantities((current) => ({ ...current, [line.id]: event.target.value }))} /></div><DeliveryQuantityHint received={quantities[line.id]} remaining={line.remaining_quantity} unit={line.unit} /></div>)}
         </>}
       </section>}
     </fieldset>

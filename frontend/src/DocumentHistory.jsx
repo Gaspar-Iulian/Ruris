@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ChevronDown, History, LoaderCircle } from 'lucide-react';
 import { api } from './api.js';
+import { quantityText } from './receiptQuantities.js';
 
 const fields = { description: 'Produs', quantity: 'Cantitate', unit: 'Unitate', unit_price: 'Preț unitar', vat_rate: 'TVA (%)',
   expected_date: 'Termen', status: 'Stare', currency: 'Monedă', invoice_date: 'Data facturii', due_date: 'Scadență',
@@ -25,8 +26,9 @@ function title(event) {
     CONFIRM: 'Comandă confirmată', APPROVE: 'Factură aprobată', PAY: 'Plată înregistrată' })[event.action] || 'Operație înregistrată';
 }
 
-function display(value) {
+function display(value, field) {
   if (value === null || value === undefined || value === '') return '—';
+  if (field === 'quantity') return quantityText(value);
   if (typeof value === 'object') return ['net_amount', 'vat_amount', 'total_amount'].map((key) => `${fields[key]}: ${display(value[key])}`).join(' · ');
   return Object.hasOwn(values, String(value)) ? values[value]
     : (/^\d+(\.\d+)?$/.test(String(value)) ? String(value).replace('.', ',') : String(value));
@@ -65,7 +67,7 @@ function HistoryEntries({ kind, id, onExpired }) {
       return <li key={event.id}><strong>{event.line_number ? `Poziția ${event.line_number}: ` : ''}{title(event)}</strong>
         <p>{event.actor_name} · {new Intl.DateTimeFormat('ro-RO', { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(event.created_at))}</p>
         {event.reason && <p>{event.reason}</p>}
-        {changes.length > 0 && <details className="history-changes"><summary>Modificări</summary><dl>{changes.map((field) => <div key={field}><dt>{fields[field]}</dt><dd>{event.before && <>{display(event.before[field])} → </>}{display(event.after?.[field])}</dd></div>)}</dl></details>}
+        {changes.length > 0 && <details className="history-changes"><summary>Modificări</summary><dl>{changes.map((field) => <div key={field}><dt>{fields[field]}</dt><dd>{event.before && <>{display(event.before[field], field)} → </>}{display(event.after?.[field], field)}</dd></div>)}</dl></details>}
       </li>;
     })}</ol>}
     {data.total > 10 && <div className="pagination"><span>Pagina {page} din {Math.ceil(data.total / 10)}</span><div><button type="button" className="button button-secondary" disabled={page === 1} onClick={() => setPage((value) => value - 1)}>Mai recente</button><button type="button" className="button button-secondary" disabled={page * 10 >= data.total} onClick={() => setPage((value) => value + 1)}>Mai vechi</button></div></div>}

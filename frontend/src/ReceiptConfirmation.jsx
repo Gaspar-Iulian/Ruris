@@ -1,6 +1,8 @@
 import { useRef, useState } from 'react';
 import { Check, CircleAlert, LoaderCircle, RefreshCw } from 'lucide-react';
 import { api } from './api.js';
+import { quantityText } from './receiptQuantities.js';
+import ReceiptBalance from './ReceiptBalance.jsx';
 
 function amount(value) {
   const normalized = value.trim().replace(',', '.');
@@ -11,8 +13,8 @@ function amount(value) {
 
 export default function ReceiptConfirmation({ receipt, onExpired, onConfirmed, onBusyChange, onReload }) {
   const [quantities, setQuantities] = useState(() => Object.fromEntries(receipt.items.map((line) => [line.id, {
-    accepted_quantity: line.purchase_order_item_id ? line.received_quantity : '0', rejected_quantity: '0',
-    pending_quantity: line.purchase_order_item_id ? '0' : line.received_quantity,
+    accepted_quantity: line.purchase_order_item_id ? quantityText(line.received_quantity, '.') : '0', rejected_quantity: '0',
+    pending_quantity: line.purchase_order_item_id ? '0' : quantityText(line.received_quantity, '.'),
   }])));
   const [reason, setReason] = useState('');
   const [saving, setSaving] = useState(false);
@@ -36,7 +38,7 @@ export default function ReceiptConfirmation({ receipt, onExpired, onConfirmed, o
         setError(`Poziția ${line.line_number}: cantități nenegative, cu maximum 3 zecimale.`); return;
       }
       if (Object.values(parsed).reduce((sum, value) => sum + value.thousandths, 0n) !== amount(line.received_quantity).thousandths) {
-        setError(`Poziția ${line.line_number}: acceptat + respins + în așteptare trebuie să fie egal cu ${line.received_quantity.replace('.', ',')} ${line.unit}.`); return;
+        setError(`Poziția ${line.line_number}: acceptat + respins + în așteptare trebuie să fie egal cu ${quantityText(line.received_quantity)} ${line.unit}.`); return;
       }
       items.push({ id: line.id, ...Object.fromEntries(Object.entries(parsed).map(([key, value]) => [key, value.text])) });
     }
@@ -60,9 +62,10 @@ export default function ReceiptConfirmation({ receipt, onExpired, onConfirmed, o
     {error && <div className="error-message" role="alert"><CircleAlert size={18} />{error}</div>}
     <fieldset className="order-fields" disabled={saving || requiresReload}>
       {receipt.items.map((line) => <section className="receipt-classification" key={line.id} aria-label={`Clasificare poziția ${line.line_number}`}>
-        <h4>{line.line_number}. {line.description}</h4><p className="field-hint">Sosit: {line.received_quantity.replace('.', ',')} {line.unit}</p>
+        <h4>{line.line_number}. {line.description}</h4><p className="field-hint">Sosit: {quantityText(line.received_quantity)} {line.unit}</p>
         {!line.purchase_order_item_id && <p className="field-hint">Fără comandă: marfa rămâne în așteptare până la clarificare sau poate fi respinsă.</p>}
         <div className="classification-grid">{[['accepted_quantity', 'Acceptat'], ['rejected_quantity', 'Respins'], ['pending_quantity', 'În așteptare']].map(([field, label]) => <div className="form-field" key={field}><label htmlFor={`classify-${line.id}-${field}`}>{label} {line.line_number}</label><input id={`classify-${line.id}-${field}`} required inputMode="decimal" maxLength={19} disabled={field === 'accepted_quantity' && !line.purchase_order_item_id} value={quantities[line.id][field]} onChange={(event) => change(line.id, field, event.target.value)} /></div>)}</div>
+      <ReceiptBalance received={line.received_quantity} values={quantities[line.id]} unit={line.unit} />
       </section>)}
       <div className="form-field"><label htmlFor="receipt-confirm-reason">Observații</label><input id="receipt-confirm-reason" required maxLength={1000} value={reason} onChange={(event) => setReason(event.target.value)} /></div>
     </fieldset>

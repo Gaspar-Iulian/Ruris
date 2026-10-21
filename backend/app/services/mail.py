@@ -69,7 +69,7 @@ def send_email(message, *, transport=None):
         email = EmailMessage()
         email["From"] = settings["sender"]
         email["To"] = recipient
-        email["Subject"] = message["subject"]
+        email["Subject"] = current_app.config.get("MAIL_SUBJECT_PREFIX", "") + message["subject"]
         if message.get("message_id"):
             email["Message-ID"] = message["message_id"]
         email.set_content(message["body"])

@@ -170,7 +170,7 @@ def test_overdue_digest_reaches_mailpit_via_smtp(session, catalog):
     from uuid import uuid4
 
     if os.getenv("RUN_MAILPIT_TESTS") != "1":
-        pytest.skip("Activeaza RUN_MAILPIT_TESTS=1 cu Mailpit local pornit.")
+        pytest.skip("Activeaza RUN_MAILPIT_TESTS=1 cu Mailpit de test pornit prin profilul Docker tests.")
     recipient = f"mailpit-{uuid4().hex}@example.com"
     catalog["users"][0].email = recipient
     add_order(session, catalog, catalog["users"][0], description="Produs verificat prin SMTP")
@@ -181,13 +181,14 @@ def test_overdue_digest_reaches_mailpit_via_smtp(session, catalog):
     repeated = current_app.test_cli_runner().invoke(args=["send-overdue-emails-local"])
     assert repeated.exit_code == 0
     assert "Mesaje acceptate de Mailpit local: 0" in repeated.output
-    ui_port = int(os.getenv("MAILPIT_UI_PORT", "8025"))
+    from mailpit_config import mailpit_test_ui_port
+    ui_port = mailpit_test_ui_port()
     query = urlencode({"query": f"to:{recipient}"})
     with urlopen(f"http://127.0.0.1:{ui_port}/api/v1/search?{query}", timeout=5) as response:
         captured = json.load(response)
     assert len(captured["messages"]) == 1
     summary = captured["messages"][0]
-    assert summary["Subject"] == "Ruris - sumar intarzieri - 2026-10-20"
+    assert summary["Subject"] == "[TEST] Ruris - sumar intarzieri - 2026-10-20"
     assert summary["To"][0]["Address"] == recipient
     with urlopen(f"http://127.0.0.1:{ui_port}/api/v1/message/{summary['ID']}", timeout=5) as response:
         full_message = json.load(response)

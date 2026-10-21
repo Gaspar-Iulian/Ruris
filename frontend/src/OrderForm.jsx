@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, CircleAlert, LoaderCircle, Plus, Save, Trash2 } from 'lucide-react';
 import { api } from './api.js';
+import AmountsPreview, { LineAmounts } from './AmountsPreview.jsx';
 
 const newLine = () => ({ key: crypto.randomUUID(), product_id: '', quantity: '1', unit_price: '', vat_rate: '0', expected_date: '' });
 
@@ -99,13 +100,14 @@ export default function OrderForm({ onExpired, onCancel, onCreated }) {
     {error && <div className="error-message" role="alert" ref={errorBox} tabIndex={-1}><CircleAlert size={18} />{error}</div>}
     <fieldset disabled={saving || uncertain} className="order-fields"><section className="panel order-header"><h2>Detalii comandă</h2><div className="order-header-grid"><div className="form-field"><label htmlFor="order-supplier">Furnizor</label><select id="order-supplier" required value={supplierId} onChange={(event) => setSupplierId(event.target.value)}><option value="">Selectează furnizorul</option>{choices.suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select></div><div className="form-field"><label htmlFor="order-currency">Monedă</label><select id="order-currency" value={currency} onChange={(event) => setCurrency(event.target.value)}><option>RON</option><option>EUR</option></select></div></div></section>
       <section className="panel order-lines"><div className="panel-heading"><h2>Produse <span className="line-count">{lines.length}</span></h2><button type="button" className="button button-secondary" disabled={lines.length >= 100 || noCatalog} onClick={() => setLines((current) => [...current, newLine()])}><Plus size={16} />Adaugă produs</button></div>
+        <p className="form-section-hint">Prețurile unitare sunt fără TVA.</p>
         {!lines.length && <p className="order-empty">Niciun produs adăugat.</p>}
         {lines.map((line, index) => <div className="order-line" key={line.key}><div className="order-line-heading"><strong>Poziția {index + 1}</strong><button type="button" className="icon-button" aria-label={`Elimină poziția ${index + 1}`} onClick={() => setLines((current) => current.filter((item) => item.key !== line.key))}><Trash2 size={16} /></button></div><div className="order-line-grid">
           <div className="form-field product-field"><label htmlFor={`${line.key}-product`}>Produs {index + 1}</label><select id={`${line.key}-product`} required value={line.product_id} onChange={(event) => changeLine(line.key, 'product_id', event.target.value)}><option value="">Selectează produsul</option>{choices.products.map((product) => <option key={product.id} value={product.id}>{product.sku} · {product.name} ({product.unit})</option>)}</select></div>
           {[['quantity', 'Cantitate', '1'], ['unit_price', 'Preț unitar', '0,00'], ['vat_rate', 'TVA (%)', '0']].map(([field, label, placeholder]) => <div className="form-field" key={field}><label htmlFor={`${line.key}-${field}`}>{label} {index + 1}</label><input id={`${line.key}-${field}`} type="text" inputMode="decimal" required maxLength={40} placeholder={placeholder} value={line[field]} onChange={(event) => changeLine(line.key, field, event.target.value)} /></div>)}
           <div className="form-field"><label htmlFor={`${line.key}-date`}>Termen {index + 1}</label><input id={`${line.key}-date`} type="date" required value={line.expected_date} onChange={(event) => changeLine(line.key, 'expected_date', event.target.value)} /></div>
-        </div></div>)}
-      </section></fieldset>
+        </div><LineAmounts line={line} currency={currency} /></div>)}
+      </section><AmountsPreview lines={lines} currency={currency} title="Valoare comandă" /></fieldset>
     <div className="order-form-footer"><button className="button button-secondary" type="button" disabled={saving} onClick={onCancel}><ArrowLeft size={16} />{uncertain ? 'Vezi comenzile' : 'Anulează'}</button><button className="button button-primary" type="submit" disabled={saving || uncertain || noCatalog || !lines.length}>{saving ? <LoaderCircle size={17} className="spin" /> : <Save size={17} />}{saving ? 'Se salvează…' : 'Salvează ciorna'}</button></div>
   </form>;
 }

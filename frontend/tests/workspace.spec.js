@@ -159,7 +159,7 @@ test('documents, details, page search and responsive menu', async ({ page }) => 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: 'Deschide meniul' }).click();
   await page.getByRole('navigation').getByRole('button', { name: 'Stoc', exact: true }).click();
-  await expect(page.getByRole('cell', { name: '24,000' })).toBeVisible();
+  await expect(page.getByRole('cell', { name: '24' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
@@ -193,6 +193,107 @@ async function fillOrder(page) {
   await page.getByLabel('TVA (%) 1', { exact: true }).fill('19');
   await page.getByLabel('Termen 1', { exact: true }).fill('2026-11-15');
 }
+
+test('order form previews exact line amounts and updates totals when products change', async ({ page }) => {
+  await mockApi(page);
+  await login(page);
+  await fillOrder(page);
+  const totals = page.getByRole('region', { name: 'Valoare comandă', exact: true });
+  await expect(totals).toContainText('25,31 RON');
+  await expect(totals).toContainText('4,81 RON');
+  await expect(totals).toContainText('30,12 RON');
+  await page.getByLabel('Cantitate 1', { exact: true }).fill('5');
+  await page.getByLabel('Preț unitar 1', { exact: true }).fill('15');
+  await expect(totals).toContainText('89,25 RON');
+  await page.getByRole('button', { name: 'Adaugă produs', exact: true }).click();
+  await expect(totals).not.toContainText('89,25 RON');
+  await page.getByRole('button', { name: 'Elimină poziția 2', exact: true }).click();
+  await expect(totals).toContainText('89,25 RON');
+});
+
+test('invoice form calculates totals immediately and preserves supplier totals during edits', async ({ page }) => {
+  await mockApi(page, 'CONTABILITATE');
+  await login(page);
+  await page.getByRole('button', { name: 'Factură nouă', exact: true }).click();
+  await page.getByLabel('Pornire factură', { exact: true }).selectOption('manual');
+  await page.getByLabel('Produs 1', { exact: true }).selectOption('1');
+  await page.getByLabel('Cantitate 1', { exact: true }).fill('5');
+  await page.getByLabel('Preț unitar 1', { exact: true }).fill('15');
+  await page.getByLabel('TVA (%) 1', { exact: true }).fill('19');
+  const totals = page.getByRole('region', { name: 'Total calculat din poziții', exact: true });
+  await expect(totals).toContainText('75,00 RON');
+  await expect(totals).toContainText('14,25 RON');
+  await expect(totals).toContainText('89,25 RON');
+  await page.getByLabel('Net factură', { exact: true }).fill('75');
+  await page.getByLabel('TVA factură', { exact: true }).fill('14,25');
+  await page.getByLabel('Total factură', { exact: true }).fill('89,26');
+  const comparison = page.getByRole('region', { name: 'Verificare totaluri introduse' });
+  await expect(comparison).toContainText('0,01 RON');
+  await expect(comparison).toContainText('netul + TVA nu este egal');
+  await page.getByLabel('Total factură', { exact: true }).fill('89,25');
+  await expect(comparison).toContainText('Totalurile corespund pozițiilor.');
+  await page.getByLabel('Cantitate 1', { exact: true }).fill('6');
+  await expect(totals).toContainText('107,10 RON');
+  await expect(page.getByLabel('Total factură', { exact: true })).toHaveValue('89,25');
+  await expect(comparison).toContainText('-17,85 RON');
+  await page.getByLabel('Monedă', { exact: true }).selectOption('EUR');
+  await expect(totals).toContainText('107,10 EUR');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+for (const registered of [77, 100]) {
+  test(`invoice form shows existing invoices and proposes the unregistered remainder after ${registered}`, async ({ page }) => {
+    const mock = await mockApi(page, 'CONTABILITATE');
+    await page.route('**/api/purchase-orders/1/invoicing', (route) => route.fulfill({ json: { order: {
+      id: 1, number: 'CA-1024', supplier_id: 1, currency: 'RON', items: [{ id: 1, product_id: 1, description: 'Filtru de aer',
+        unit: 'BUC', quantity: '100.000', unit_price: '2.0000', vat_rate: '19.00', accepted_quantity: '100.000',
+        allocated_quantity: `${registered}.000`, available_quantity: `${100 - registered}.000`,
+        registered_quantity: `${registered}.000`, remaining_to_invoice: `${100 - registered}.000` }],
+      invoice_documents: [{ id: 12, series: 'RR', number: '001', status: 'BLOCKED', items: [{ purchase_order_item_id: 1, quantity: `${registered}.000` }] }],
+    } } }));
+    await login(page);
+    await page.getByRole('button', { name: 'Factură nouă', exact: true }).click();
+    await page.getByLabel('Comandă', { exact: true }).selectOption('1');
+    await expect(page.getByLabel('Cantitate 1', { exact: true })).toHaveValue(String(100 - registered));
+    const existing = page.getByRole('region', { name: 'Facturi existente pentru comandă' });
+    await expect(existing).toContainText('RR 001');
+    await expect(existing).toContainText('Blocată');
+    await expect(existing).toContainText(`${registered} BUC`);
+    await page.getByLabel('Număr factură', { exact: true }).fill('NEXT');
+    await page.getByLabel('Data facturii', { exact: true }).fill('2026-10-21');
+    await page.getByLabel('Scadență', { exact: true }).fill('2026-11-21');
+    if (registered === 100) {
+      await page.getByRole('button', { name: 'Salvează ciorna', exact: true }).click();
+      await expect(page.getByRole('alert')).toContainText('cantitate pozitivă');
+      expect(mock.requests.some((request) => request.path === '/api/invoices' && request.method === 'POST')).toBe(false);
+      await page.getByLabel('Cantitate 1', { exact: true }).fill('100');
+      await expect(page.getByText(/Posibilă factură duplicată/)).toBeVisible();
+    } else {
+      await page.getByRole('button', { name: 'Salvează ciorna', exact: true }).click();
+      await expect(page.getByText('Factura NEXT a fost salvată ca ciornă.')).toBeVisible();
+      expect(mock.requests.find((request) => request.path === '/api/invoices' && request.method === 'POST').body.items[0].quantity).toBe('23');
+    }
+  });
+}
+
+test('warehouse sees quantity balance before confirming and surplus before saving', async ({ page }) => {
+  await mockApi(page, 'DEPOZIT', { draftReceipt: true });
+  await login(page);
+  await page.getByRole('navigation').getByRole('button', { name: 'Recepții', exact: true }).click();
+  await page.getByRole('button', { name: 'Detalii recepție REC-248' }).click();
+  await expect(page.getByText('Cantități repartizate integral: 77 BUC.', { exact: true })).toBeVisible();
+  await page.getByLabel('Acceptat 1', { exact: true }).fill('70');
+  await expect(page.getByText('De repartizat: 7 BUC.', { exact: true })).toBeVisible();
+  await page.getByLabel('Respins 1', { exact: true }).fill('8');
+  await expect(page.getByText('Depășire față de cantitatea sosită: 1 BUC.', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Închide detaliile', exact: true }).click();
+  await page.getByRole('button', { name: 'Recepție nouă', exact: true }).click();
+  await page.getByLabel('Comandă', { exact: true }).selectOption('1');
+  await page.getByLabel('Cantitate sosită 1', { exact: true }).fill('65');
+  await expect(page.getByText(/Surplus față de restul comenzii: 5 BUC/)).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Valoare comandă' })).toHaveCount(0);
+});
 
 test('general portal copy and order creation send exact decimals and CSRF', async ({ page }) => {
   const { requests } = await mockApi(page);
@@ -631,19 +732,21 @@ test.describe('invoice creation', () => {
     await expect(page.getByLabel('Furnizor', { exact: true })).toHaveValue('1');
     await expect(page.getByLabel('Furnizor', { exact: true })).toBeDisabled();
     await expect(page.getByLabel('Produs 1', { exact: true })).toHaveValue('1');
-    await expect(page.getByLabel('Cantitate 1', { exact: true })).toHaveValue('100.000');
+    await expect(page.getByLabel('Cantitate 1', { exact: true })).toHaveValue('100');
     await expect(page.getByLabel('Preț unitar 1', { exact: true })).toHaveValue('2.0000');
     await expect(page.getByLabel('TVA (%) 1', { exact: true })).toHaveValue('19.00');
-    await expect(page.getByText(/Comandat: 100,000 BUC.*Acceptat: 77,000.*Asociat facturilor: 20,000.*Disponibil de asociat: 57,000/)).toBeVisible();
+    await expect(page.getByText(/Comandat: 100 BUC.*Acceptat: 77.*Asociat facturilor: 20.*Disponibil de asociat: 57/)).toBeVisible();
+    await expect(page.getByText('Cantitate fără marfă disponibilă pentru asociere: 43 BUC.')).toBeVisible();
     await page.getByLabel('Preț unitar 1', { exact: true }).fill('3,0000');
     await page.getByLabel('Monedă', { exact: true }).selectOption('EUR');
+    await expect(page.getByText(/Prețul, TVA sau moneda diferă de comandă/)).toBeVisible();
     await page.getByLabel('Număr factură', { exact: true }).fill('ORD-01');
     await page.getByLabel('Data facturii', { exact: true }).fill('2026-10-21');
     await page.getByLabel('Scadență', { exact: true }).fill('2026-11-21');
     await page.getByRole('button', { name: 'Salvează ciorna' }).click();
     await expect(page.getByText('Factura ORD-01 a fost salvată ca ciornă.')).toBeVisible();
     const sent = mock.requests.find((request) => request.path === '/api/invoices' && request.method === 'POST');
-    expect(sent.body.items).toEqual([{ product_id: 1, quantity: '100.000', unit_price: '3.0000', vat_rate: '19.00', purchase_order_item_id: 1 }]);
+    expect(sent.body.items).toEqual([{ product_id: 1, quantity: '100', unit_price: '3.0000', vat_rate: '19.00', purchase_order_item_id: 1 }]);
     expect(sent.body.supplier_id).toBe(1);
     expect(sent.body.currency).toBe('EUR');
   });
@@ -655,7 +758,7 @@ test.describe('invoice creation', () => {
     await login(page);
     await page.getByRole('button', { name: 'Factură nouă', exact: true }).click();
     await page.getByLabel('Comandă', { exact: true }).selectOption('1');
-    await expect(page.getByLabel('Cantitate 1', { exact: true })).toHaveValue('100.000');
+    await expect(page.getByLabel('Cantitate 1', { exact: true })).toHaveValue('100');
     await page.getByLabel('Comandă', { exact: true }).selectOption('2');
     await expect(page.getByRole('alert')).toContainText('Comandă indisponibilă.');
     await expect(page.getByRole('button', { name: 'Salvează ciorna' })).toBeDisabled();
@@ -850,7 +953,7 @@ test.describe('order delivery display', () => {
       await expect(row).toContainText('Furnizor test');
       await expect(row).toContainText('Filtru de aer');
       await expect(row).toContainText('FLT-001');
-      await expect(row).toContainText('12,000');
+      await expect(row).toContainText('12');
       await expect(row).toContainText('BUC');
       await expect(row).not.toContainText('Furnizor #1');
       if (role === 'DEPOZIT') {
@@ -870,7 +973,7 @@ test.describe('order delivery display', () => {
     await page.getByRole('navigation').getByRole('button', { name: 'Comenzi', exact: true }).click();
     const group = page.getByRole('rowgroup', { name: 'Comandă CA-1024' });
     await expect(group.getByRole('row')).toHaveCount(2);
-    await expect(group.getByRole('row').filter({ hasText: 'Ulei pentru motor' }).getByRole('cell')).toHaveText(['Ulei pentru motorOIL-002', '2,500', 'L', '10,125 RON']);
+    await expect(group.getByRole('row').filter({ hasText: 'Ulei pentru motor' }).getByRole('cell')).toHaveText(['Ulei pentru motorOIL-002', '2,5', 'L', '10,125 RON']);
     await expect(page.getByRole('button', { name: 'Detalii comandă CA-1024' })).toHaveCount(1);
     for (const query of ['furnizor test', 'ulei pentru motor', 'oil-002']) {
       await page.getByRole('textbox', { name: 'Caută pe pagina curentă' }).fill(query);
@@ -906,7 +1009,7 @@ test.describe('order delivery display', () => {
     await page.getByRole('navigation').getByRole('button', { name: 'Comenzi', exact: true }).click();
     await page.getByRole('button', { name: 'Detalii comandă CA-1024' }).click();
     const delivery = page.getByRole('region', { name: 'Situația livrării' });
-    await expect(delivery.getByRole('row').filter({ hasText: 'Filtru de aer', hasNotText: 'suplimentar' }).getByRole('cell')).toHaveText(['Filtru de aer', '100,000', '40,000', '60,000', 'BUC', 'Parțială']);
+    await expect(delivery.getByRole('row').filter({ hasText: 'Filtru de aer', hasNotText: 'suplimentar' }).getByRole('cell')).toHaveText(['Filtru de aer', '100', '40', '60', 'BUC', 'Parțială']);
     await expect(delivery.getByRole('row').filter({ hasText: 'suplimentar' })).toContainText('Nelivrată');
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -921,7 +1024,7 @@ test.describe('order delivery display', () => {
     await login(page);
     await page.getByRole('button', { name: 'Detalii comandă CA-1024' }).click();
     const delivery = page.getByRole('region', { name: 'Situația livrării' });
-    await expect(delivery.getByRole('row').filter({ hasText: 'Filtru de aer' })).toContainText('0,000');
+    await expect(delivery.getByRole('row').filter({ hasText: 'Filtru de aer' })).toContainText('0');
     await expect(delivery.getByRole('heading')).toContainText('Completă');
   });
 
@@ -949,7 +1052,7 @@ test.describe('receipt confirmation', () => {
   test('accepts 77 with the receipt line ID, version and CSRF and reloads stock', async ({ page }) => {
     const mock = await mockApi(page, 'DEPOZIT', { draftReceipt: true });
     await openReceipt(page);
-    await expect(page.getByLabel('Acceptat 1', { exact: true })).toHaveValue('77.000');
+    await expect(page.getByLabel('Acceptat 1', { exact: true })).toHaveValue('77');
     await page.getByLabel('Observații', { exact: true }).fill(' Verificat fizic ');
     await page.getByRole('button', { name: 'Confirmă recepția', exact: true }).click();
     await expect(page.getByRole('dialog')).toContainText('Recepția a fost confirmată.');
@@ -958,11 +1061,11 @@ test.describe('receipt confirmation', () => {
     const sent = mock.requests.filter((request) => request.path === '/api/receipts/2/confirm');
     expect(sent).toHaveLength(1);
     expect(sent[0].headers['x-csrf-token']).toBe('test-csrf');
-    expect(sent[0].body).toEqual({ version: 1, reason: 'Verificat fizic', items: [{ id: 11, accepted_quantity: '77.000', rejected_quantity: '0', pending_quantity: '0' }] });
+    expect(sent[0].body).toEqual({ version: 1, reason: 'Verificat fizic', items: [{ id: 11, accepted_quantity: '77', rejected_quantity: '0', pending_quantity: '0' }] });
     await page.getByRole('button', { name: 'Închide detaliile' }).click();
     await expect(page.getByRole('row').filter({ hasText: 'REC-248' })).toContainText('Confirmată');
     await page.getByRole('navigation').getByRole('button', { name: 'Stoc', exact: true }).click();
-    await expect(page.getByRole('cell', { name: '101,000', exact: true })).toBeVisible();
+    await expect(page.getByRole('cell', { name: '101', exact: true })).toBeVisible();
   });
 
   test('separates accepted, rejected and pending quantities', async ({ page }) => {
@@ -975,10 +1078,10 @@ test.describe('receipt confirmation', () => {
     await page.getByRole('button', { name: 'Confirmă recepția', exact: true }).click();
     await expect(page.getByRole('dialog')).toContainText('Recepția a fost confirmată.');
     const row = page.getByRole('dialog').getByRole('row').filter({ hasText: 'Filtru de aer' });
-    await expect(row.getByRole('cell')).toHaveText(['Filtru de aer', '77,000', 'BUC', '70', '5', '2']);
+    await expect(row.getByRole('cell')).toHaveText(['Filtru de aer', '77', 'BUC', '70', '5', '2']);
     await page.keyboard.press('Escape');
     await page.getByRole('navigation').getByRole('button', { name: 'Stoc', exact: true }).click();
-    await expect(page.getByRole('cell', { name: '94,000', exact: true })).toBeVisible();
+    await expect(page.getByRole('cell', { name: '94', exact: true })).toBeVisible();
   });
 
   test('compares decimal sums exactly and supports several lines', async ({ page }) => {
@@ -994,7 +1097,7 @@ test.describe('receipt confirmation', () => {
     await expect(page.getByRole('dialog')).toContainText('Recepția a fost confirmată.');
     expect(mock.requests.find((request) => request.path === '/api/receipts/2/confirm').body.items).toEqual([
       { id: 11, accepted_quantity: '0.1', rejected_quantity: '0.2', pending_quantity: '0.3' },
-      { id: 12, accepted_quantity: '3.500', rejected_quantity: '0', pending_quantity: '0' },
+      { id: 12, accepted_quantity: '3.5', rejected_quantity: '0', pending_quantity: '0' },
     ]);
   });
 
@@ -1009,7 +1112,7 @@ test.describe('receipt confirmation', () => {
     }
     await page.getByLabel('Acceptat 1', { exact: true }).fill('76');
     await page.getByRole('button', { name: 'Confirmă recepția', exact: true }).click();
-    await expect(page.getByRole('alert')).toContainText('trebuie să fie egal cu 77,000');
+    await expect(page.getByRole('alert')).toContainText('trebuie să fie egal cu 77');
     expect(mock.requests.some((request) => request.path === '/api/receipts/2/confirm')).toBe(false);
   });
 
@@ -1052,7 +1155,7 @@ test.describe('receipt confirmation', () => {
     await page.getByLabel('Observații', { exact: true }).fill('Control');
     await page.getByRole('button', { name: 'Confirmă recepția', exact: true }).click();
     await expect(page.getByRole('alert')).toContainText('Cantitățile necesită clarificare.');
-    await expect(page.getByLabel('Acceptat 1', { exact: true })).toHaveValue('77.000');
+    await expect(page.getByLabel('Acceptat 1', { exact: true })).toHaveValue('77');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 

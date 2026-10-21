@@ -13,6 +13,7 @@ from sqlalchemy.schema import CreateSchema
 
 from app import create_app
 from app.extensions import db
+from mailpit_config import configure_test_mailpit
 
 
 @pytest.fixture
@@ -20,6 +21,7 @@ def session():
     if os.getenv("RUN_POSTGRES_TESTS") != "1":
         pytest.skip("Activeaza RUN_POSTGRES_TESTS=1 cu PostgreSQL pornit.")
     app = create_app()
+    configure_test_mailpit(app)
     with app.app_context():
         assert db.engine.dialect.name == "postgresql"
         with db.engine.connect() as connection:

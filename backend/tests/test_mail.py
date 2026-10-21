@@ -35,6 +35,17 @@ def test_transport_uses_only_loopback_and_builds_email_headers(app_context):
     assert connection.send_message.call_args.kwargs["to_addrs"] == ["buyer@example.com"]
 
 
+def test_test_prefix_marks_outgoing_email_without_changing_the_stored_message(app_context):
+    app_context.config["MAIL_SUBJECT_PREFIX"] = "[TEST] "
+    original = message()
+    with patch("app.services.mail.smtplib.SMTP") as smtp:
+        connection = smtp.return_value.__enter__.return_value
+        connection.send_message.return_value = {}
+        send_to_local_mailpit(original)
+    assert connection.send_message.call_args.args[0]["Subject"] == "[TEST] Sumar întârziere"
+    assert original["subject"] == "Sumar întârziere"
+
+
 @pytest.mark.parametrize("error", [ConnectionRefusedError("private detail"), TimeoutError("private detail"),
                                   smtplib.SMTPException("private detail")])
 def test_smtp_errors_are_sanitized(app_context, error):

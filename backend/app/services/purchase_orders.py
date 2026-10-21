@@ -6,7 +6,7 @@ from sqlalchemy import Date, func, select
 
 from app.extensions import db
 from app.models import Product, PurchaseOrder, PurchaseOrderItem, Role, Supplier, User
-from app.models import InvoiceAllocation, Receipt, ReceiptItem
+from app.models import Invoice, InvoiceAllocation, InvoiceItem, Receipt, ReceiptItem
 from app.services.audit import record_audit
 
 
@@ -342,6 +342,31 @@ def get_order_invoicing(order_id):
     order = get_order(order_id, role=Role.CONTABILITATE)
     delivery = get_order_delivery(order_id, role=Role.CONTABILITATE)
     ids = [item["id"] for item in order["items"]]
+    registered = {}
+    documents = {}
+    invoice_lines = db.session.execute(select(Invoice.id, Invoice.series, Invoice.number, Invoice.status,
+        InvoiceItem.purchase_order_item_id, InvoiceItem.quantity)
+        .join(InvoiceItem, InvoiceItem.invoice_id == Invoice.id)
+        .where(InvoiceItem.purchase_order_item_id.in_(ids)).order_by(Invoice.id, InvoiceItem.line_number))
+    for row in invoice_lines:
+        registered[row.purchase_order_item_id] = registered.get(row.purchase_order_item_id, Decimal("0")) + row.quantity
+        document = documents.setdefault(row.id, {"id": row.id, "series": row.series, "number": row.number,
+            "status": row.status, "items": []})
+        document["items"].append({"purchase_order_item_id": row.purchase_order_item_id, "quantity": format(row.quantity, ".3f")})
+    manual_lines = db.session.execute(select(Invoice.id, Invoice.series, Invoice.number, Invoice.status,
+        ReceiptItem.purchase_order_item_id, func.sum(InvoiceAllocation.quantity).label("quantity"))
+        .select_from(InvoiceAllocation).join(InvoiceItem, InvoiceItem.id == InvoiceAllocation.invoice_item_id)
+        .join(Invoice, Invoice.id == InvoiceItem.invoice_id).join(ReceiptItem, ReceiptItem.id == InvoiceAllocation.receipt_item_id)
+        .where(InvoiceItem.purchase_order_item_id.is_(None), ReceiptItem.purchase_order_item_id.in_(ids), InvoiceAllocation.status == "ACTIVE")
+        .group_by(Invoice.id, Invoice.series, Invoice.number, Invoice.status, ReceiptItem.purchase_order_item_id)
+        .order_by(Invoice.id, ReceiptItem.purchase_order_item_id))
+    for row in manual_lines:
+        registered[row.purchase_order_item_id] = registered.get(row.purchase_order_item_id, Decimal("0")) + row.quantity
+        document = documents.setdefault(row.id, {"id": row.id, "series": row.series, "number": row.number,
+            "status": row.status, "items": []})
+        document["items"].append({"purchase_order_item_id": row.purchase_order_item_id,
+            "quantity": format(row.quantity, ".3f"), "via_receipts": True})
+    order["invoice_documents"] = [documents[key] for key in sorted(documents)]
     allocated = dict(db.session.execute(select(ReceiptItem.purchase_order_item_id, func.sum(InvoiceAllocation.quantity))
         .join(InvoiceAllocation, InvoiceAllocation.receipt_item_id == ReceiptItem.id)
         .join(Receipt, Receipt.id == ReceiptItem.receipt_id)
@@ -352,7 +377,9 @@ def get_order_invoicing(order_id):
         accepted = Decimal(delivery_by_id[item["id"]]["accepted_quantity"])
         used = allocated.get(item["id"], Decimal("0"))
         item.update(accepted_quantity=format(accepted, ".3f"), allocated_quantity=format(used, ".3f"),
-                    available_quantity=format(max(accepted - used, Decimal("0")), ".3f"))
+                    available_quantity=format(max(accepted - used, Decimal("0")), ".3f"),
+                    registered_quantity=format(registered.get(item["id"], Decimal("0")), ".3f"),
+                    remaining_to_invoice=format(max(Decimal(item["quantity"]) - registered.get(item["id"], Decimal("0")), Decimal("0")), ".3f"))
     return order
 
 
@@ -379,7 +406,8 @@ def overdue_items_query(today, *, role=Role.ACHIZITII):
 
 def list_overdue_items(*, page, per_page, role=Role.ACHIZITII):
     today = bucharest_date()
-    query = overdue_items_query(today, role=role)
+    query = (overdue_items_query(today, role=role).add_columns(Supplier.name.label("supplier_name"))
+        .join(Supplier, Supplier.id == PurchaseOrder.supplier_id))
     total = db.session.scalar(select(func.count()).select_from(query.subquery()))
     rows = db.session.execute(query.order_by(PurchaseOrderItem.expected_date, PurchaseOrder.id, PurchaseOrderItem.line_number)
                               .offset((page - 1) * per_page).limit(per_page))

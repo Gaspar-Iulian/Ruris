@@ -168,17 +168,28 @@ def test_receipt_digest_is_received_once_by_real_local_mailpit(session, data):
     from app.services.email_delivery import send_receipt_digests_local
 
     if os.getenv("RUN_MAILPIT_TESTS") != "1":
-        pytest.skip("Activeaza RUN_MAILPIT_TESTS=1 cu Mailpit local pornit.")
+        pytest.skip("Activeaza RUN_MAILPIT_TESTS=1 cu Mailpit de test pornit prin profilul Docker tests.")
     receipt = arrival(data)
     recipient = f"receipt-{uuid4().hex}@example.com"
     session.get(User, data["users"][Role.ACHIZITII]).email = recipient
     session.commit()
     assert send_receipt_digests_local(kind="RECEIPT_BUYER", builder=build_buyer_receipt_digests)["sent"] == 1
     assert send_receipt_digests_local(kind="RECEIPT_BUYER", builder=build_buyer_receipt_digests)["sent"] == 0
-    port = int(os.getenv("MAILPIT_UI_PORT", "8025"))
+    from mailpit_config import mailpit_test_ui_port
+    port = mailpit_test_ui_port()
     with urlopen(f"http://127.0.0.1:{port}/api/v1/search?{urlencode({'query': 'to:' + recipient})}", timeout=5) as response:
         messages = json.load(response)["messages"]
     assert len(messages) == 1
     with urlopen(f"http://127.0.0.1:{port}/api/v1/message/{messages[0]['ID']}", timeout=5) as response:
         message = json.load(response)
     assert receipt["number"] in message["Text"] and "10.000 BUC" in message["Text"]
+    assert message["Subject"].startswith("[TEST] Ruris - clarificari receptii")
+    buyer, _ = authorize(data["users"][Role.ACHIZITII])
+    assert receipt["id"] in {item["id"] for item in buyer.get("/api/receipts/pending").json["receipts"]}
+    journal = buyer.get("/api/notifications").json["notifications"]
+    assert len(journal) == 1 and journal[0]["status"] == "SENT"
+    assert receipt["number"] in journal[0]["body"]
+    receipt = operation(data, receipt, "clarify").json["receipt"]
+    receipt = operation(data, receipt, "resolve", quantity="10").json["receipt"]
+    assert buyer.get("/api/receipts/pending").json["total"] == 0
+    assert buyer.get("/api/notifications").json["total"] == 1

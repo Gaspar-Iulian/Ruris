@@ -160,7 +160,7 @@ def test_blocked_digest_is_captured_once_by_local_mailpit(session, catalog):
     from uuid import uuid4
 
     if os.getenv("RUN_MAILPIT_TESTS") != "1":
-        pytest.skip("Activeaza RUN_MAILPIT_TESTS=1 cu Mailpit local pornit.")
+        pytest.skip("Activeaza RUN_MAILPIT_TESTS=1 cu Mailpit de test pornit prin profilul Docker tests.")
     add_invoice(session, catalog)
     recipient = f"blocked-{uuid4().hex}@example.com"
     catalog["users"][0].email = recipient
@@ -168,7 +168,8 @@ def test_blocked_digest_is_captured_once_by_local_mailpit(session, catalog):
     session.commit()
     assert send_blocked_invoice_digests_local()["sent"] == 1
     assert send_blocked_invoice_digests_local()["sent"] == 0
-    port = int(os.getenv("MAILPIT_UI_PORT", "8025"))
+    from mailpit_config import mailpit_test_ui_port
+    port = mailpit_test_ui_port()
     with urlopen(f"http://127.0.0.1:{port}/api/v1/search?{urlencode({'query': 'to:' + recipient})}", timeout=5) as response:
         result = json.load(response)
     assert len(result["messages"]) == 1

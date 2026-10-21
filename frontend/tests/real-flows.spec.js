@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { quantityText } from '../src/receiptQuantities.js';
 
 function samplePdf() {
   const stream = 'BT /F1 12 Tf 36 90 Td (Document RURIS pentru test) Tj ET';
@@ -171,7 +172,7 @@ test.describe('real Flask and PostgreSQL flows', () => {
     await download(page, 'aviz.png', PNG);
     await page.getByRole('button', { name: 'Închide detaliile' }).click();
     await navigate(page, 'Stoc');
-    await expect(page.getByRole('row').filter({ hasText: 'SKU-DOCRECEIPT' })).toContainText('5,000');
+    await expect(page.getByRole('row').filter({ hasText: 'SKU-DOCRECEIPT' })).toContainText('5');
   });
 
   test('invoice evidence requires reverification, retains withdrawn files and becomes read-only after approval', async ({ page }) => {
@@ -184,7 +185,7 @@ test.describe('real Flask and PostgreSQL flows', () => {
     await expect(page.getByRole('dialog').locator('.document-meta')).toContainText('Verificată');
     await attach(page);
     await expect(page.getByRole('dialog').locator('.document-meta')).toContainText('Ciornă');
-    await expect(page.getByRole('region', { name: 'Asocieri active' })).toContainText('5,000');
+    await expect(page.getByRole('region', { name: 'Asocieri active' })).toContainText('5');
     const panel = page.getByRole('region', { name: 'Documente atașate' });
     await panel.getByRole('button', { name: 'Retrage factură.pdf', exact: true }).click();
     await panel.getByLabel('Motivul retragerii', { exact: true }).fill('Document inlocuit de furnizor');
@@ -206,9 +207,12 @@ test.describe('real Flask and PostgreSQL flows', () => {
 
   async function invoice(page, order, number, price, amount, date = '2026-10-21') {
     await page.getByRole('button', { name: 'Factură nouă', exact: true }).click();
+    const sourceLoaded = page.waitForResponse((response) => response.url().includes(`/purchase-orders/${order.id}/invoicing`));
     await page.getByLabel('Comandă', { exact: true }).selectOption({ label: order.number });
-    await expect(page.getByLabel('Cantitate 1', { exact: true })).toHaveValue(order.items[0].quantity);
-    if (amount) await page.getByLabel('Cantitate 1', { exact: true }).fill(amount);
+    const source = (await (await sourceLoaded).json()).order;
+    await expect(page.getByLabel('Cantitate 1', { exact: true })).toHaveValue(quantityText(source.items[0].remaining_to_invoice, '.'));
+    if (source.invoice_documents.length) await expect(page.getByRole('region', { name: 'Facturi existente pentru comandă' })).toBeVisible();
+    await page.getByLabel('Cantitate 1', { exact: true }).fill(amount || order.items[0].quantity);
     if (price) await page.getByLabel('Preț unitar 1', { exact: true }).fill(price);
     await page.getByLabel('Număr factură', { exact: true }).fill(number);
     await page.getByLabel('Data facturii', { exact: true }).fill(date);
@@ -217,9 +221,13 @@ test.describe('real Flask and PostgreSQL flows', () => {
     await page.getByLabel('Net factură', { exact: true }).fill(net.toFixed(2));
     await page.getByLabel('TVA factură', { exact: true }).fill('0');
     await page.getByLabel('Total factură', { exact: true }).fill(net.toFixed(2));
+    const preview = await page.getByRole('region', { name: 'Total calculat din poziții', exact: true }).innerText();
     const saved = page.waitForResponse((response) => response.url().endsWith('/api/invoices') && response.request().method() === 'POST');
     await page.getByRole('button', { name: 'Salvează ciorna' }).click();
     const created = (await (await saved).json()).invoice;
+    for (const key of ['net_amount', 'vat_amount', 'total_amount']) {
+      expect(preview).toContain(`${created[key].replace('.', ',')} ${created.currency}`);
+    }
     await page.getByRole('button', { name: `Detalii factură ${created.number}`, exact: true }).click();
     await expect(page.getByRole('region', { name: 'Procesare factură' })).toBeVisible();
     return created;
@@ -294,7 +302,7 @@ test.describe('real Flask and PostgreSQL flows', () => {
     await expect(page.getByRole('dialog').locator('.document-meta')).toContainText('Blocată');
     await expect(page.getByRole('region', { name: 'Comparare totaluri' })).toContainText('0,01');
     await expect(page.getByRole('region', { name: 'Blocaje factură' })).toContainText('diferenta: +0.01 RON');
-    await expect(page.getByRole('region', { name: 'Asocieri active' })).toContainText('5,000');
+    await expect(page.getByRole('region', { name: 'Asocieri active' })).toContainText('5');
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.getByRole('button', { name: 'Editează totalurile', exact: true }).click();
@@ -315,8 +323,8 @@ test.describe('real Flask and PostgreSQL flows', () => {
     await login(page, 'CONTABILITATE');
     const created = await invoice(page, order, 'FULL-001');
     await associate(page);
-    await expect(page.getByRole('region', { name: 'Asocieri active' })).toContainText('77,000');
-    await expect(page.getByRole('region', { name: 'Asocieri active' })).toContainText('23,000');
+    await expect(page.getByRole('region', { name: 'Asocieri active' })).toContainText('77');
+    await expect(page.getByRole('region', { name: 'Asocieri active' })).toContainText('23');
     await page.getByRole('button', { name: 'Verifică factura', exact: true }).click();
     await expect(page.getByRole('dialog').locator('.document-meta')).toContainText('Verificată');
     await expect(page.getByText(/Total în RON:/)).toContainText('200,00');
@@ -333,7 +341,7 @@ test.describe('real Flask and PostgreSQL flows', () => {
     await page.getByRole('button', { name: 'Închide detaliile' }).click();
     await expect(page.getByRole('row').filter({ hasText: created.number })).toContainText('Plătită');
     await navigate(page, 'Stoc');
-    await expect(page.getByRole('row').filter({ hasText: 'SKU-FULL' })).toContainText('100,000');
+    await expect(page.getByRole('row').filter({ hasText: 'SKU-FULL' })).toContainText('100');
     await navigate(page, 'Comenzi');
     await expect(page.getByRole('row').filter({ hasText: order.number })).toContainText('Completă');
     await navigate(page, 'Întârzieri');
@@ -353,7 +361,7 @@ test.describe('real Flask and PostgreSQL flows', () => {
     await expect(page.getByRole('button', { name: 'Înregistrează plata', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Închide detaliile' }).click();
     await navigate(page, 'Întârzieri');
-    await expect(page.getByRole('row').filter({ hasText: order.number })).toContainText('23,000');
+    await expect(page.getByRole('row').filter({ hasText: order.number })).toContainText('23');
   });
 
   test('a blocked invoice for 5 square meters is matched and verified in one action', async ({ page }) => {
@@ -369,6 +377,7 @@ test.describe('real Flask and PostgreSQL flows', () => {
     expect(blocked.invoice.status).toBe('BLOCKED');
     await page.getByRole('button', { name: 'Închide detaliile' }).click();
     await page.getByRole('button', { name: 'Detalii factură QUICK-001', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Blocaje factură' })).toContainText('Cantitate facturata 5; alocata 0.');
     await expect(page.getByRole('region', { name: 'Blocaje factură' })).toContainText('Există marfă disponibilă, dar încă neasociată.');
     await page.getByRole('button', { name: 'Asociază și verifică', exact: true }).click();
     await expect(page.getByRole('alert')).toContainText('Completează observațiile operației.');
@@ -376,7 +385,7 @@ test.describe('real Flask and PostgreSQL flows', () => {
     await page.getByRole('button', { name: 'Asociază și verifică', exact: true }).click();
     await expect(page.getByRole('dialog').locator('.document-meta')).toContainText('Verificată');
     await expect(page.getByText('Asocierile au fost salvate. Factura este verificată.', { exact: true })).toBeVisible();
-    await expect(page.getByRole('region', { name: 'Asocieri active' })).toContainText('5,000');
+    await expect(page.getByRole('region', { name: 'Asocieri active' })).toContainText('5');
     await expect(page.getByRole('region', { name: 'Blocaje factură' })).toHaveCount(0);
   });
 
@@ -418,13 +427,13 @@ test.describe('real Flask and PostgreSQL flows', () => {
     const receipt = (await (await saved).json()).receipt;
     await page.getByRole('button', { name: `Detalii recepție ${receipt.number}`, exact: true }).click();
     await expect(page.getByLabel('Acceptat 1', { exact: true })).toBeDisabled();
-    await expect(page.getByLabel('În așteptare 1', { exact: true })).toHaveValue('10.000');
+    await expect(page.getByLabel('În așteptare 1', { exact: true })).toHaveValue('10');
     await page.getByLabel('Observații', { exact: true }).fill('Marfa există fizic, fără comandă');
     await page.getByRole('button', { name: 'Confirmă recepția', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Acceptă cantitatea', exact: true })).toBeDisabled();
     await page.getByRole('button', { name: 'Închide detaliile' }).click();
     await navigate(page, 'Stoc');
-    await expect(page.getByRole('row').filter({ hasText: 'SKU-UNORDERED' })).toContainText('0,000');
+    await expect(page.getByRole('row').filter({ hasText: 'SKU-UNORDERED' })).toContainText('0');
     await logout(page);
 
     await login(page, 'CONTABILITATE');
@@ -453,18 +462,18 @@ test.describe('real Flask and PostgreSQL flows', () => {
     await page.getByLabel('Cantitate de decis 1', { exact: true }).fill('6');
     await page.getByLabel('Observații decizie 1', { exact: true }).fill('Acceptare parțială 6 bucăți');
     await page.getByRole('button', { name: 'Acceptă cantitatea', exact: true }).click();
-    await expect(page.getByRole('region', { name: 'Acceptări ulterioare' })).toContainText('6,000');
-    await expect(page.getByRole('region', { name: 'Cantități în așteptare' })).toContainText('4,000');
+    await expect(page.getByRole('region', { name: 'Acceptări ulterioare' })).toContainText('6');
+    await expect(page.getByRole('region', { name: 'Cantități în așteptare' })).toContainText('4');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.getByLabel('Cantitate de decis 1', { exact: true }).fill('4');
     await page.getByLabel('Observații decizie 1', { exact: true }).fill('Ambalaje deteriorate, respingere 4 bucăți');
     await page.getByRole('button', { name: 'Respinge cantitatea', exact: true }).click();
     await expect(page.getByRole('region', { name: 'Cantități în așteptare' })).toHaveCount(0);
-    await expect(page.getByRole('region', { name: 'Istoric recepție' })).toContainText('respinse 4,000 BUC');
-    await expect(page.getByRole('region', { name: 'Istoric recepție' })).toContainText('acceptate 6,000 BUC');
+    await expect(page.getByRole('region', { name: 'Istoric recepție' })).toContainText('respinse 4 BUC');
+    await expect(page.getByRole('region', { name: 'Istoric recepție' })).toContainText('acceptate 6 BUC');
     await page.getByRole('button', { name: 'Închide detaliile' }).click();
     await navigate(page, 'Stoc');
-    await expect(page.getByRole('row').filter({ hasText: 'SKU-UNORDERED' })).toContainText('6,000');
+    await expect(page.getByRole('row').filter({ hasText: 'SKU-UNORDERED' })).toContainText('6');
     await navigate(page, 'Clarificări');
     await expect(page.getByRole('button', { name: `Detalii recepție ${receipt.number}`, exact: true })).toHaveCount(0);
     await logout(page);
@@ -538,7 +547,7 @@ test.describe('real Flask and PostgreSQL flows', () => {
     await expect(page.getByRole('row').filter({ hasText: order.number })).toContainText('Completă');
     await expect(page.getByRole('row').filter({ hasText: second.number })).toContainText('Completă');
     await navigate(page, 'Stoc');
-    await expect(page.getByRole('row').filter({ hasText: 'SKU-SURPLUS' })).toContainText('14,000');
+    await expect(page.getByRole('row').filter({ hasText: 'SKU-SURPLUS' })).toContainText('14');
     await logout(page);
 
     await login(page, 'CONTABILITATE');

@@ -19,12 +19,13 @@ from app import create_app
 from app.extensions import db
 from app.models import Role, User
 from app.services.exchange_rates import ExchangeRateUnavailable
+from mailpit_config import configure_test_mailpit
 
 
 def main():
     app = create_app()
     app.config.update(JWT_COOKIE_SECURE=False, RATELIMIT_ENABLED=False)
-    app.config.update(MAIL_TRANSPORT="LOCAL_MAILPIT", MAILPIT_SMTP_HOST="127.0.0.1")
+    configure_test_mailpit(app)
     stopped = False
     fx_mode = "fixture"
 
@@ -89,6 +90,7 @@ def main():
                     with make_server("127.0.0.1", 5201, app, threaded=False) as server:
                         server.timeout = 1
                         print("Browser test server ready on 5201; all data will roll back.", flush=True)
+                        print(f"Automated emails use the separate test inbox on {app.config['MAILPIT_TEST_UI_PORT']}.", flush=True)
                         while not stopped:
                             server.handle_request()
             finally:

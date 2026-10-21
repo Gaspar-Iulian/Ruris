@@ -103,11 +103,17 @@ Emailurile au istoric, reincercare la eroare si protectie impotriva duplicatelor
 
 ## Docker
 
-Compose va defini frontendul, backendul si PostgreSQL.
-Serviciile pentru sarcinile periodice vor fi adaugate ulterior.
-Datele PostgreSQL se pastreaza intr-un volum persistent.
-Mutarea datelor necesita backup si restaurare, separat de codul din Git.
-Secretele locale se pastreaza in .env, exclus din Git.
+Profilul `app` definește frontendul React compilat servit de Nginx, API-ul Flask
+prin Gunicorn, PostgreSQL, migrarea și procesul de notificări. Browserul folosește
+o singură adresă; Nginx trimite `/api/` către API-ul intern. Ordinea de pornire
+folosește verificări de disponibilitate și finalizarea cu succes a migrării.
+
+Baza și documentele sunt păstrate în volume distincte. Backupul oprește temporar
+serviciile care scriu, salvează baza și fișierele și le repornește. Restaurarea
+verifică integritatea și refuză suprascrierea unei destinații cu date existente.
+Secretele locale rămân în `.env`, în afara imaginilor și a repository-ului.
+
+Comenzile de instalare și mutare sunt în [ghidul Docker](docker.md).
 
 ## Ordinea implementarii
 

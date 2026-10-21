@@ -1,11 +1,79 @@
 services:
+  api:
+    profiles: ["app"]
+    image: ruris-api:local
+    build: ./backend
+    env_file: ${RURIS_ENV_FILE:-.env}
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      MAILPIT_SMTP_HOST: mailpit
+      MAILPIT_SMTP_PORT: 1025
+      ATTACHMENT_STORAGE_PATH: /data/attachments
+      BEHIND_PROXY: "true"
+    volumes:
+      - attachments_data:/data/attachments
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    restart: unless-stopped
+    stop_grace_period: 35s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/ready', timeout=5)"]
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 15s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    profiles: ["app"]
+    image: ruris-web:local
+    build: ./frontend
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8080}:8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/api/ready"]
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 10s
+    depends_on:
+      api:
+        condition: service_healthy
+
+  maintenance:
+    profiles: ["maintenance"]
+    image: postgres:17
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGDATABASE: ${POSTGRES_DB:?Configureaza POSTGRES_DB in .env}
+      PGUSER: ${POSTGRES_USER:?Configureaza POSTGRES_USER in .env}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Configureaza POSTGRES_PASSWORD in .env}
+      BACKUP_PROJECT: ${COMPOSE_PROJECT_NAME:-ruris}
+    volumes:
+      - attachments_data:/attachments
+      - ./backups:/backups
+      - ./scripts/container:/ops:ro
+    entrypoint: ["bash"]
+    command: ["/ops/backup.sh"]
+
   migrate:
-    profiles: ["notifications"]
-    image: ruris-notifications:local
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.worker
-    env_file: .env
+    profiles: ["app", "notifications"]
+    image: ruris-api:local
+    build: ./backend
+    env_file: ${RURIS_ENV_FILE:-.env}
     environment:
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
@@ -15,19 +83,25 @@ services:
         condition: service_healthy
 
   notification-worker:
-    profiles: ["notifications"]
-    image: ruris-notifications:local
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.worker
-    env_file: .env
+    profiles: ["app", "notifications"]
+    image: ruris-api:local
+    build: ./backend
+    env_file: ${RURIS_ENV_FILE:-.env}
     environment:
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
       MAILPIT_SMTP_HOST: mailpit
       MAILPIT_SMTP_PORT: 1025
       MAIL_TRANSPORT: ${MAIL_TRANSPORT:-LOCAL_MAILPIT}
+      ATTACHMENT_STORAGE_PATH: /data/attachments
     command: ["python", "-m", "flask", "--app", "app", "run-notification-worker"]
+    volumes:
+      - attachments_data:/data/attachments:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
     restart: unless-stopped
     stop_grace_period: 30s
     depends_on:
@@ -41,6 +115,13 @@ services:
     ports:
       - "127.0.0.1:${MAILPIT_SMTP_PORT:-1025}:1025"
       - "127.0.0.1:${MAILPIT_UI_PORT:-8025}:8025"
+
+  mailpit-test:
+    profiles: ["tests"]
+    image: axllent/mailpit:v1.31.6
+    ports:
+      - "127.0.0.1:${MAILPIT_TEST_SMTP_PORT:-1026}:1025"
+      - "127.0.0.1:${MAILPIT_TEST_UI_PORT:-8026}:8025"
 
   db:
     image: postgres:17
@@ -61,3 +142,4 @@ services:
 
 volumes:
   postgres_data:
+  attachments_data:

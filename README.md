@@ -47,13 +47,31 @@ Istoricul comenzilor, recepțiilor și facturilor respectă rolurile utilizatori
 Notificările includ întârzieri, facturi blocate și clarificări ale recepțiilor,
 cu jurnal personal, deduplicare și reîncercări.
 
-Docker Compose pornește PostgreSQL și Mailpit. Profilul `notifications` adaugă
-migrarea și workerul permanent. SMTP extern este configurabil cu TLS; dezvoltarea
-și testele de trimitere folosesc Mailpit local. Backendul și frontendul pornesc
-momentan separat. Migrarea curentă este `0024_document_attachments`.
+Profilul Docker `app` pornește întregul portal: React/Nginx, Flask/Gunicorn,
+PostgreSQL, migrarea și workerul de notificări. Datele și documentele au volume
+persistente. SMTP extern este configurabil cu TLS; mediul local folosește Mailpit.
+Migrarea curentă este `0024_document_attachments`.
 
 `GET /api/health` verifică funcționarea API-ului, fără conectare la baza de date.
 Limitările și scenariile de test sunt descrise în documentul cu starea proiectului.
+
+## Pornire completă cu Docker
+
+Pe un PC nou, creează `.env` din `.env.example`, completează parola PostgreSQL și
+cheia JWT, apoi rulează din rădăcina proiectului:
+
+```powershell
+docker compose --profile app up -d --build --wait
+docker compose --profile app exec api python -m flask --app app create-admin
+```
+
+Portalul este la **http://127.0.0.1:8080**. Crearea administratorului se face doar
+la instalarea inițială; conturile existente rămân păstrate. Pentru utilizare nu
+trebuie instalate Python sau Node pe calculatorul gazdă.
+
+Pornirea pe alt PC, importul documentelor locale, backupul și restaurarea sunt
+descrise în [ghidul Docker](docs/docker.md). Nu porni simultan serverele locale și
+API-ul Docker asupra aceleiași baze cu spații de fișiere diferite.
 
 ## Pornire backend pe Windows
 
@@ -84,8 +102,8 @@ Opreste serverul cu Ctrl+C in terminal.
 
 ## PostgreSQL pentru dezvoltare
 
-Fisierul `compose.yaml` defineste deocamdata doar baza de date.
-Backendul si frontendul vor fi adaugate ulterior.
+Fără profilul `app`, poți porni doar PostgreSQL și Mailpit pentru dezvoltare.
+Instrucțiunile următoare sunt pentru Flask și Vite rulate local.
 Comenzile de mai jos se ruleaza din radacina proiectului, dupa pornirea Docker Desktop.
 
 La prima configurare, copiaza modelul:
@@ -1173,7 +1191,14 @@ si UNKNOWN nu se retrimit la repetarea comenzii. Trimiterea sumarurilor adauga a
 fara sa modifice documentele sau stocul. Mesajul demonstrativ send-test-email ramane
 separat, poate fi repetat si nu foloseste jurnalul sumarurilor.
 
-Testul de integrare SMTP se activeaza explicit, cu Mailpit si PostgreSQL pornite:
+Testele automate folosesc un Mailpit separat de inboxul aplicatiei.
+Din radacina proiectului, porneste PostgreSQL si inboxul testelor:
+
+```powershell
+docker compose --profile tests up -d db mailpit-test
+```
+
+Apoi, din backend, activeaza testul de integrare SMTP:
 
 ```powershell
 $env:RUN_POSTGRES_TESTS='1'
@@ -1182,8 +1207,9 @@ $env:RUN_MAILPIT_TESTS='1'
 ```
 
 Testul foloseste date intr-o schema PostgreSQL izolata si verifica mesajul capturat
-prin API-ul Mailpit, cu destinatar unic de test. Nu sterge mesajele deja existente
-in inboxul local. Ultima verificare: 46 de teste trecute, inclusiv SMTP real local.
+prin API-ul Mailpit de test, cu destinatar unic. SMTP-ul testelor foloseste 1026,
+iar inboxul testelor este la http://127.0.0.1:8026. Subiectele au prefixul [TEST].
+Inboxul aplicatiei ramane la 8025, pe SMTP 1025. Mesajele existente sunt pastrate.
 
 Documentatie: [Mailpit Docker](https://mailpit.axllent.org/docs/install/docker/)
 si [API Mailpit](https://mailpit.axllent.org/docs/api-v1/).
@@ -2122,6 +2148,7 @@ pret gresit cu corectare si facturarea dubla cu eliberarea asocierii. Corectarea
 este verificata si pe mobil. Buildul frontend reuseste.
 
 Testele reale ruleaza separat, intr-o schema temporara anulata la final.
+Porneste mai intai serviciile de test cu `docker compose --profile tests up -d db mailpit-test`.
 Intr-un terminal din backend:
 
 ```powershell
@@ -2423,10 +2450,28 @@ fișierele comerciale ale comenzilor. Facturile aprobate sau plătite sunt numai
 pentru consultare; modificarea fișierelor înainte de aprobare cere reverificare.
 
 Migrarea `0024_document_attachments` păstrează metadatele, autorii, SHA-256 și
-istoricul retragerilor. Conținutul este implicit în `backend/instance/attachments`,
+istoricul retragerilor. Conținutul este implicit în `instance/attachments`,
 exclus din Git și păstrat la repornirea backendului. Pentru mutare sau backup
 trebuie păstrate împreună baza PostgreSQL și directorul de fișiere.
 
 Detalii despre permisiuni, rutele API, idempotență, rezultate incerte, stocare,
 backup și comanda `flask --app app check-attachments` sunt în
 [docs/atasamente.md](docs/atasamente.md).
+
+## Clarificări active și emailuri istorice
+
+Pagina **Clarificări** afișează recepțiile confirmate care au cantități încă în
+așteptare. După acceptarea sau respingerea completă a acelor cantități, recepția
+nu mai apare în această listă. Emailul trimis anterior rămâne în inbox și în
+**Notificări**, unde îl vede contul destinatar, conform rolului actual.
+În pagina goală există și butonul **Vezi notificările**.
+
+Emailurile testelor automate ajung exclusiv în serviciul `mailpit-test`, pe
+SMTP 1026, cu inbox pe 8026 și prefix `[TEST]`. `MAILPIT_TEST_SMTP_PORT` și
+`MAILPIT_TEST_UI_PORT` permit configurarea porturilor; testele refuză folosirea
+acelorași porturi ca aplicația. Aplicația și workerul folosesc în continuare
+inboxul lor, implicit 8025. Mesajele istorice de test din vechiul inbox sunt
+păstrate; documentele și conturile temporare ale acelor teste au fost anulate.
+
+Verificarea acestei separări a inclus 94 de teste backend, SMTP real în inboxul
+dedicat, 12 teste de interfață și un flux complet email → portal prin browser.

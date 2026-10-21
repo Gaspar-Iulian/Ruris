@@ -47,8 +47,34 @@ def test_invoicing_context_counts_active_allocations_only(session, setup):
     assert result.status_code == 201
     line = setup["client"].get(context_url).json["order"]["items"][0]
     assert (line["allocated_quantity"], line["available_quantity"]) == ("4.000", "2.000")
+    assert (line["registered_quantity"], line["remaining_to_invoice"]) == ("4.000", "6.000")
+    assert setup["client"].get(context_url).json["order"]["invoice_documents"][0]["items"][0]["via_receipts"] is True
     assert setup["client"].post(url(setup) + "/release", headers=setup["headers"], json={"version": 2, "reason": "Corectie", "allocation_ids": [result.json["allocations"][0]["id"]]}).status_code == 200
     assert setup["client"].get(context_url).json["order"]["items"][0]["available_quantity"] == "6.000"
+
+
+def test_invoicing_context_lists_existing_documents_and_remaining_order_quantity(session, setup):
+    from app.models import PurchaseOrderItem
+
+    source_id = setup["receipt"]["items"][0]["purchase_order_item_id"]
+    order_id = session.get(PurchaseOrderItem, source_id).purchase_order_id
+    context_url = f"/api/purchase-orders/{order_id}/invoicing"
+    client, headers = setup["client"], setup["headers"]
+    before = client.get(context_url).json["order"]
+    assert before["invoice_documents"] == []
+    assert before["items"][0]["registered_quantity"] == "0.000"
+    for number, quantity, expected_rest in [("PART-1", "6", "4.000"), ("PART-2", "4", "0.000")]:
+        data = linked_data(setup, number=number)
+        data["items"][0]["quantity"] = quantity
+        created = client.post("/api/invoices", headers=headers, json=data)
+        assert created.status_code == 201
+        context = client.get(context_url).json["order"]
+        assert context["items"][0]["remaining_to_invoice"] == expected_rest
+    assert [(row["number"], row["status"]) for row in context["invoice_documents"]] == [("PART-1", "DRAFT"), ("PART-2", "DRAFT")]
+    assert context["items"][0]["registered_quantity"] == "10.000"
+    assert context["items"][0]["allocated_quantity"] == "0.000"
+    assert context["items"][0]["available_quantity"] == "6.000"
+    assert context["invoice_documents"][0]["items"] == [{"purchase_order_item_id": source_id, "quantity": "6.000"}]
 
 
 @pytest.mark.parametrize("role", list(Role))

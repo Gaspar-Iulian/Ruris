@@ -1,4 +1,5 @@
 from flask import Flask
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from app.cli import create_admin_command, preview_overdue_emails_command
 from app.cli import send_overdue_emails_local_command, send_test_email_command
@@ -27,6 +28,9 @@ from app.cli import check_attachments_command
 def create_app():
     app = Flask(__name__)
     app.config.update(get_config())
+    if app.config["BEHIND_PROXY"]:
+        # Trust the single internal reverse proxy.
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=0, x_port=0, x_prefix=0)
     db.init_app(app)
     migrate.init_app(app, db)
     jwt.init_app(app)

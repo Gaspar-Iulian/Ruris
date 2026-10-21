@@ -192,6 +192,9 @@ def test_create_rounding_totals_audit_and_snapshot(setup, session):
     listing = client.get("/api/invoices?per_page=1").json
     assert listing["total"] == 1
     assert "items" not in listing["invoices"][0]
+    summary = listing["invoices"][0]
+    assert summary["supplier_name"] == session.get(Supplier, data["supplier_id"]).name
+    assert summary["line_items"] == [{**result["items"][0], "order_number": None}]
 
 
 @pytest.mark.parametrize("role", list(Role))

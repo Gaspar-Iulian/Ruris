@@ -751,8 +751,12 @@ def test_confirmed_receipt_visibility_filters_list_detail_and_total(session, set
     assert response.headers["Cache-Control"] == "no-store"
     assert response.json["total"] == (3 if role == Role.DEPOZIT else 1)
     if role != Role.DEPOZIT:
-        assert response.json["receipts"] == [{**{key: value for key, value in confirmed.items() if key != "items"},
-                                               "supplier_name": "Furnizor", "pending_count": 1}]
+        summary = response.json["receipts"][0]
+        assert {key: value for key, value in summary.items() if key != "line_items"} == {
+            **{key: value for key, value in confirmed.items() if key != "items"},
+            "supplier_name": "Furnizor", "pending_count": 1}
+        assert summary["line_items"] == [{**confirmed["items"][0], "order_number": setup["order"]["number"],
+                                          "total_accepted_quantity": "2.000"}]
         assert client.get("/api/receipts?page=2&per_page=1").json["receipts"] == []
     expected = {**confirmed, "supplier_name": "Furnizor", "items": [{**confirmed["items"][0],
         "total_accepted_quantity": "2.000", "pending_order_number": setup["order"]["number"],
@@ -1000,7 +1004,7 @@ def test_overdue_permissions_and_response_fields(session, setup, overdue_today, 
     if role != Role.ADMIN:
         assert set(response.json["items"][0]) == {
             "order_id", "order_number", "supplier_id", "id", "line_number", "product_id", "description", "unit",
-            "quantity", "expected_date", "accepted_quantity", "remaining_quantity", "days_overdue",
+            "quantity", "expected_date", "accepted_quantity", "remaining_quantity", "days_overdue", "supplier_name",
         }
 
 
