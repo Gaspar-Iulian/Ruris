@@ -15,6 +15,7 @@ import Notifications from './Notifications.jsx';
 import DocumentLinesTable from './DocumentLinesTable.jsx';
 import { quantityText as quantity } from './receiptQuantities.js';
 import AmountsPreview from './AmountsPreview.jsx';
+import rurisLogo from './assets/ruris-logo.png';
 
 const roles = { ADMIN: 'Administrare', ACHIZITII: 'Achiziții', DEPOZIT: 'Depozit', CONTABILITATE: 'Contabilitate' };
 const states = { DRAFT: 'Ciornă', CONFIRMED: 'Confirmată', CLOSED: 'Închisă', CANCELLED: 'Anulată', BLOCKED: 'Blocată', VERIFIED: 'Verificată', APPROVED: 'Aprobată', PAID: 'Plătită' };
@@ -40,7 +41,7 @@ const dateText = (value) => value ? new Intl.DateTimeFormat('ro-RO', { dateStyle
 const dateTimeText = (value) => value ? new Intl.DateTimeFormat('ro-RO', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—';
 
 function Brand({ light = false }) {
-  return <div className={`brand ${light ? 'brand-light' : ''}`}><span className="brand-mark">R</span><div><strong>RURIS<span>®</span></strong><small>PORTAL INTERN</small></div></div>;
+  return <div className={`brand ${light ? 'brand-light' : ''}`}><span className="brand-logo-frame"><img className="brand-logo" src={rurisLogo} alt="RURIS" width="238" height="124" decoding="async" /></span><small>PORTAL INTERN</small></div>;
 }
 
 function Status({ value }) {
