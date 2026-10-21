@@ -7,9 +7,218 @@ from app.models import Role
 from app.permissions import roles_required
 from app.services.invoices import InvoiceForbiddenError, InvoiceNotFoundError, create_invoice, get_invoice, list_invoices
 from app.services.invoices import InvoiceConflictError, update_invoice
+from app.services.invoice_allocations import create_allocations, list_allocations, release_allocations
+from app.services.invoice_verification import approve_invoice, verify_invoice, list_issues
+from app.services.invoice_payments import record_payment
+from app.services.invoice_matching import get_matching
 
 
 invoices_bp = Blueprint("invoices", __name__)
+
+
+@invoices_bp.get("/<int:invoice_id>/matching")
+@roles_required(Role.CONTABILITATE)
+def matching(invoice_id):
+    if not 1 <= invoice_id <= 9223372036854775807:
+        return jsonify(message="Factura nu a fost gasita."), 404
+    try:
+        return jsonify(get_matching(invoice_id))
+    except InvoiceNotFoundError as error:
+        return jsonify(message=str(error)), 404
+    except SQLAlchemyError:
+        return jsonify(message="Situatia facturii nu este disponibila momentan."), 503
+
+
+@invoices_bp.post("/<int:invoice_id>/pay")
+@roles_required(Role.CONTABILITATE)
+def pay(invoice_id):
+    if not 1 <= invoice_id <= 9223372036854775807:
+        return jsonify(message="Factura nu a fost gasita."), 404
+    if not request.is_json:
+        return jsonify(message="Cererea trebuie sa contina JSON."), 415
+    request.max_content_length = 4096
+    try:
+        data = request.get_json()
+    except RequestEntityTooLarge:
+        return jsonify(message="Cererea este prea mare."), 413
+    except BadRequest:
+        return jsonify(message="Corpul cererii nu este JSON valid."), 400
+    if not isinstance(data, dict) or set(data) != {"version", "reason", "paid_at", "payment_reference"}:
+        return jsonify(message="Trimite version, reason, paid_at si payment_reference."), 400
+    try:
+        return jsonify(invoice=record_payment(actor_user_id=current_user.id, invoice_id=invoice_id, **data))
+    except InvoiceForbiddenError as error:
+        return jsonify(message=str(error)), 403
+    except InvoiceNotFoundError as error:
+        return jsonify(message=str(error)), 404
+    except InvoiceConflictError as error:
+        return jsonify(message=str(error)), 409
+    except ValueError as error:
+        return jsonify(message=str(error)), 400
+    except SQLAlchemyError:
+        return jsonify(message="Plata nu a putut fi inregistrata momentan."), 503
+
+
+@invoices_bp.post("/<int:invoice_id>/approve")
+@roles_required(Role.CONTABILITATE)
+def approve(invoice_id):
+    if not 1 <= invoice_id <= 9223372036854775807:
+        return jsonify(message="Factura nu a fost gasita."), 404
+    if not request.is_json:
+        return jsonify(message="Cererea trebuie sa contina JSON."), 415
+    request.max_content_length = 4096
+    try:
+        data = request.get_json()
+    except RequestEntityTooLarge:
+        return jsonify(message="Cererea este prea mare."), 413
+    except BadRequest:
+        return jsonify(message="Corpul cererii nu este JSON valid."), 400
+    if not isinstance(data, dict) or set(data) != {"version", "reason"}:
+        return jsonify(message="Trimite version si reason."), 400
+    try:
+        result = approve_invoice(actor_user_id=current_user.id, invoice_id=invoice_id, **data)
+        return jsonify(result), 200 if result["approved"] else 409
+    except InvoiceForbiddenError as error:
+        return jsonify(message=str(error)), 403
+    except InvoiceNotFoundError as error:
+        return jsonify(message=str(error)), 404
+    except InvoiceConflictError as error:
+        return jsonify(message=str(error)), 409
+    except ValueError as error:
+        return jsonify(message=str(error)), 400
+    except SQLAlchemyError:
+        return jsonify(message="Factura nu a putut fi aprobata momentan."), 503
+
+
+@invoices_bp.post("/<int:invoice_id>/verify")
+@roles_required(Role.CONTABILITATE)
+def verify(invoice_id):
+    if not 1 <= invoice_id <= 9223372036854775807:
+        return jsonify(message="Factura nu a fost gasita."), 404
+    if not request.is_json:
+        return jsonify(message="Cererea trebuie sa contina JSON."), 415
+    request.max_content_length = 4096
+    try:
+        data = request.get_json()
+    except RequestEntityTooLarge:
+        return jsonify(message="Cererea este prea mare."), 413
+    except BadRequest:
+        return jsonify(message="Corpul cererii nu este JSON valid."), 400
+    if not isinstance(data, dict) or set(data) != {"version"}:
+        return jsonify(message="Trimite doar version."), 400
+    try:
+        return jsonify(verify_invoice(actor_user_id=current_user.id, invoice_id=invoice_id, **data))
+    except InvoiceForbiddenError as error:
+        return jsonify(message=str(error)), 403
+    except InvoiceNotFoundError as error:
+        return jsonify(message=str(error)), 404
+    except InvoiceConflictError as error:
+        return jsonify(message=str(error)), 409
+    except ValueError as error:
+        return jsonify(message=str(error)), 400
+    except SQLAlchemyError:
+        return jsonify(message="Factura nu a putut fi verificata momentan."), 503
+
+
+@invoices_bp.get("/<int:invoice_id>/issues")
+@roles_required(Role.CONTABILITATE)
+def issues(invoice_id):
+    if not 1 <= invoice_id <= 9223372036854775807:
+        return jsonify(message="Factura nu a fost gasita."), 404
+    if set(request.args) - {"page", "per_page"} or any(len(request.args.getlist(key)) != 1 for key in request.args):
+        return jsonify(message="Parametrii permisi sunt page si per_page, o singura data fiecare."), 400
+    try:
+        page, per_page = int(request.args.get("page", "1")), int(request.args.get("per_page", "20"))
+        if not 1 <= page <= 1000000 or not 1 <= per_page <= 100:
+            raise ValueError()
+        return jsonify(list_issues(invoice_id, page=page, per_page=per_page))
+    except InvoiceNotFoundError as error:
+        return jsonify(message=str(error)), 404
+    except ValueError:
+        return jsonify(message="Paginare invalida."), 400
+    except SQLAlchemyError:
+        return jsonify(message="Motivele de blocare nu sunt disponibile momentan."), 503
+
+
+@invoices_bp.post("/<int:invoice_id>/allocations/release")
+@roles_required(Role.CONTABILITATE)
+def release(invoice_id):
+    if not 1 <= invoice_id <= 9223372036854775807:
+        return jsonify(message="Factura nu a fost gasita."), 404
+    if not request.is_json:
+        return jsonify(message="Cererea trebuie sa contina JSON."), 415
+    request.max_content_length = 4096
+    try:
+        data = request.get_json()
+    except RequestEntityTooLarge:
+        return jsonify(message="Cererea este prea mare."), 413
+    except BadRequest:
+        return jsonify(message="Corpul cererii nu este JSON valid."), 400
+    if not isinstance(data, dict) or set(data) != {"version", "reason", "allocation_ids"}:
+        return jsonify(message="Trimite version, reason si allocation_ids."), 400
+    try:
+        return jsonify(release_allocations(actor_user_id=current_user.id, invoice_id=invoice_id, **data))
+    except InvoiceForbiddenError as error:
+        return jsonify(message=str(error)), 403
+    except InvoiceNotFoundError as error:
+        return jsonify(message=str(error)), 404
+    except InvoiceConflictError as error:
+        return jsonify(message=str(error)), 409
+    except ValueError as error:
+        return jsonify(message=str(error)), 400
+    except SQLAlchemyError:
+        return jsonify(message="Alocarile nu au putut fi eliberate momentan."), 503
+
+
+@invoices_bp.post("/<int:invoice_id>/allocations")
+@roles_required(Role.CONTABILITATE)
+def allocate(invoice_id):
+    if not 1 <= invoice_id <= 9223372036854775807:
+        return jsonify(message="Factura nu a fost gasita."), 404
+    if not request.is_json:
+        return jsonify(message="Cererea trebuie sa contina JSON."), 415
+    request.max_content_length = 65536
+    try:
+        data = request.get_json()
+    except RequestEntityTooLarge:
+        return jsonify(message="Cererea este prea mare."), 413
+    except BadRequest:
+        return jsonify(message="Corpul cererii nu este JSON valid."), 400
+    if not isinstance(data, dict) or set(data) != {"version", "reason", "items"}:
+        return jsonify(message="Trimite version, reason si items."), 400
+    try:
+        result = create_allocations(actor_user_id=current_user.id, invoice_id=invoice_id, **data)
+    except InvoiceForbiddenError as error:
+        return jsonify(message=str(error)), 403
+    except InvoiceNotFoundError as error:
+        return jsonify(message=str(error)), 404
+    except InvoiceConflictError as error:
+        return jsonify(message=str(error)), 409
+    except ValueError as error:
+        return jsonify(message=str(error)), 400
+    except SQLAlchemyError:
+        return jsonify(message="Alocarile nu au putut fi salvate momentan."), 503
+    return jsonify(result), 201
+
+
+@invoices_bp.get("/<int:invoice_id>/allocations")
+@roles_required(Role.CONTABILITATE)
+def allocations(invoice_id):
+    if not 1 <= invoice_id <= 9223372036854775807:
+        return jsonify(message="Factura nu a fost gasita."), 404
+    if set(request.args) - {"page", "per_page"} or any(len(request.args.getlist(key)) != 1 for key in request.args):
+        return jsonify(message="Parametrii permisi sunt page si per_page, o singura data fiecare."), 400
+    try:
+        page, per_page = int(request.args.get("page", "1")), int(request.args.get("per_page", "20"))
+        if not 1 <= page <= 1000000 or not 1 <= per_page <= 100:
+            raise ValueError()
+        return jsonify(list_allocations(invoice_id, page=page, per_page=per_page))
+    except InvoiceNotFoundError as error:
+        return jsonify(message=str(error)), 404
+    except ValueError:
+        return jsonify(message="Paginare invalida: page 1-1000000, per_page 1-100."), 400
+    except SQLAlchemyError:
+        return jsonify(message="Alocarile nu sunt disponibile momentan."), 503
 
 
 @invoices_bp.patch("/<int:invoice_id>")

@@ -1,0 +1,12 @@
+Buna, {{ name }}!
+
+Facturi blocate la {{ as_of }} (Europe/Bucharest):
+{% for item in items %}
+- Factura #{{ item.invoice_id }}: {{ item.series }} {{ item.number }}, furnizor {{ item.supplier_name }}, data {{ item.invoice_date }}
+  Motiv: {{ item.code }}{% if item.invoice_item_id %}, pozitie #{{ item.invoice_item_id }}{% endif %}
+  {{ item.details }}
+  Responsabil pentru clarificare: {{ item.responsible_role }}
+{% endfor %}
+
+Consulta factura in aplicatie si repeta verificarea dupa clarificare.
+Acest sumar nu aproba facturile si nu inregistreaza plati.

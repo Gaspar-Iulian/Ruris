@@ -3,7 +3,8 @@ from datetime import timedelta
 from flask import render_template
 
 from app.extensions import db
-from app.models import PurchaseOrder, PurchaseOrderItem, Role, User
+from app.models import Invoice, InvoiceIssue, PurchaseOrder, PurchaseOrderItem, Role, Supplier, User
+from sqlalchemy import select
 from app.services.purchase_orders import bucharest_date, overdue_items_query
 
 
@@ -55,3 +56,24 @@ def build_overdue_digests():
             "item_count": len(group["items"]),
         })
     return {"as_of": today.isoformat(), "timezone": "Europe/Bucharest", "messages": messages, "skipped_items": skipped_items}
+
+
+def build_blocked_invoice_digests():
+    today = bucharest_date()
+    rows = db.session.execute(select(Invoice.id.label("invoice_id"), Invoice.series, Invoice.number, Invoice.invoice_date,
+        Supplier.name.label("supplier_name"), InvoiceIssue.invoice_item_id, InvoiceIssue.code, InvoiceIssue.details,
+        InvoiceIssue.responsible_role).join(InvoiceIssue, InvoiceIssue.invoice_id == Invoice.id)
+        .join(Supplier, Supplier.id == Invoice.supplier_id)
+        .where(Invoice.status == "BLOCKED", InvoiceIssue.resolved_at.is_(None))
+        .order_by(Invoice.id, InvoiceIssue.id)).all()
+    messages = []
+    users = db.session.execute(select(User.id, User.name, User.email).where(User.is_active.is_(True), User.role == Role.CONTABILITATE).order_by(User.id)).all()
+    if rows:
+        items = [dict(row._mapping) for row in rows]
+        for user in users:
+            messages.append({"recipient_user_id": user.id, "to": user.email,
+                "subject": f"Ruris - facturi blocate - {today.isoformat()}",
+                "body": render_template("emails/blocked_invoices.txt", name=user.name, as_of=today.isoformat(), items=items).strip(),
+                "item_count": len(items)})
+    return {"as_of": today.isoformat(), "timezone": "Europe/Bucharest", "messages": messages,
+            "skipped_items": len(rows) if not users else 0}

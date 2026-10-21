@@ -8,5 +8,8 @@ from app.models.receipt import Receipt, ReceiptItem
 from app.models.stock_movement import StockMovement
 from app.models.email_delivery import EmailAttempt, EmailOutbox
 from app.models.invoice import Invoice, InvoiceItem
+from app.models.invoice_allocation import InvoiceAllocation
+from app.models.invoice_issue import InvoiceIssue
+from app.models.exchange_rate import ExchangeRate
 
-__all__ = ["AuditEvent", "EmailAttempt", "EmailOutbox", "Invoice", "InvoiceItem", "Product", "PurchaseOrder", "PurchaseOrderItem", "Receipt", "ReceiptItem", "RevokedToken", "Role", "StockMovement", "Supplier", "User"]
+__all__ = ["AuditEvent", "EmailAttempt", "EmailOutbox", "ExchangeRate", "Invoice", "InvoiceAllocation", "InvoiceItem", "InvoiceIssue", "Product", "PurchaseOrder", "PurchaseOrderItem", "Receipt", "ReceiptItem", "RevokedToken", "Role", "StockMovement", "Supplier", "User"]

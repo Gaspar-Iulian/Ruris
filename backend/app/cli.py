@@ -8,6 +8,37 @@ from app.services.notifications import build_overdue_digests, build_test_overdue
 from app.services.mail import LocalEmailDeliveryError, send_to_local_mailpit
 from app.services.email_delivery import list_email_deliveries, send_overdue_digests_local
 from app.services.notification_worker import run_notification_tick, worker_settings
+from app.services.notifications import build_blocked_invoice_digests
+from app.services.email_delivery import send_blocked_invoice_digests_local
+
+
+@click.command("preview-blocked-invoice-emails", help="Previzualizeaza sumarul facturilor blocate, fara trimitere.")
+@with_appcontext
+def preview_blocked_invoice_emails_command():
+    try:
+        digest = build_blocked_invoice_digests()
+    except SQLAlchemyError:
+        raise click.ClickException("Sumarul facturilor nu este disponibil. Verifica PostgreSQL.") from None
+    click.echo(f"Previzualizare pentru {digest['as_of']}. Mesaje: {len(digest['messages'])}.")
+    for message in digest["messages"]:
+        click.echo(f"\nCatre: {message['to']}\nSubiect: {message['subject']}\n\n{message['body']}")
+    if digest["skipped_items"]:
+        click.echo(f"Motive fara destinatar activ din contabilitate: {digest['skipped_items']}.")
+
+
+@click.command("send-blocked-invoice-emails-local", help="Trimite sumarul facturilor blocate numai in Mailpit local.")
+@with_appcontext
+def send_blocked_invoice_emails_local_command():
+    try:
+        result = send_blocked_invoice_digests_local()
+    except SQLAlchemyError:
+        raise click.ClickException("Jurnalul facturilor nu a putut fi actualizat. Verifica PostgreSQL.") from None
+    click.echo(f"Mesaje acceptate de Mailpit local: {result['sent']}.")
+    click.echo("Stari: " + ", ".join(f"{status}: {count}" for status, count in sorted(result["states"].items())))
+    if result["skipped_items"]:
+        click.echo(f"Motive fara destinatar activ din contabilitate: {result['skipped_items']}.")
+    if result["states"].get("FAILED") or result["states"].get("UNKNOWN"):
+        raise click.ClickException("Exista trimiteri nereusite sau neclare; consulta jurnalul.")
 
 
 @click.command("create-admin", help="Creeaza primul administrator si inregistreaza auditul.")
@@ -87,7 +118,7 @@ def list_email_deliveries_command(limit):
     if not deliveries:
         click.echo("Nu exista mesaje in jurnal.")
     for delivery in deliveries:
-        click.echo(f"ID {delivery['id']} | {delivery['as_of']} | utilizator {delivery['recipient_user_id']} | "
+        click.echo(f"ID {delivery['id']} | {delivery['kind']} | {delivery['as_of']} | utilizator {delivery['recipient_user_id']} | "
                    f"{delivery['status']} | incercari {delivery['attempt_count']} | {delivery['last_error'] or '-'}")
         if delivery["next_attempt_at"]:
             click.echo(f"  Urmatoarea incercare (UTC): {delivery['next_attempt_at'].isoformat()}")

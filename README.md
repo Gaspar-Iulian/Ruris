@@ -1004,7 +1004,7 @@ Soldul se calculeaza prin suma miscarilor, fara un sold editabil separat.
 In acest pas nu exista iesiri, retururi, ajustari, anulare de receptie sau acceptare
 ulterioara a cantitatilor in asteptare. Registrul permite momentan numai RECEIPT.
 Consultarea receptiilor confirmate este disponibila si pentru ACHIZITII si
-CONTABILITATE. Nu exista inca verificarea facturilor.
+CONTABILITATE. Verificarea facturilor este descrisa in sectiunea dedicata de mai jos.
 
 Ultima verificare: 557 de teste trecute, inclusiv confirmarea simultana de catre
 doi operatori. Migrari la `0009_stock_movements`, fara diferente intre modele
@@ -1340,7 +1340,7 @@ Acestea sunt conventii interne de identificare; nu reprezinta validare fiscala.
 Furnizorul si produsele trebuie sa fie active. Denumirea si unitatea produsului
 sunt copiate pe linie, pentru pastrarea istoricului. O ciorna poate avea 0-100 de linii.
 Scadenta nu poate preceda data facturii. Sunt acceptate monedele RON si EUR;
-conversia valutara nu este inca implementata.
+conversia valutara este aplicata la verificare, conform sectiunii dedicate de mai jos.
 
 Cantitatea (3 zecimale), pretul (4) si TVA procentual (2, intre 0 si 100) sunt
 trimise ca texte zecimale. Sumele sunt calculate de server cu Decimal:
@@ -1350,10 +1350,10 @@ Totalurile antetului sunt suma valorilor liniilor. Exemplul produce net 1.01,
 TVA 0.19 si total 1.20 EUR. Aceasta conventie va necesita reconciliere cu valorile
 documentului furnizorului in etapa verificarii facturilor.
 
-Starea este exclusiv DRAFT. Clientul nu poate impune totaluri, stare sau autor.
+Factura se creeaza in DRAFT. Clientul nu poate impune totaluri, stare sau autor.
 Factura, liniile si auditul sunt salvate intr-o singura tranzactie: o eroare
-anuleaza intreaga operatie. Nu exista inca alocare la receptii,
-verificare in trei pasi, aprobare sau plata.
+anuleaza intreaga operatie. Alocarea si verificarea sunt descrise mai jos;
+aprobarea si inregistrarea platii sunt descrise mai jos.
 
 Migrarea acestui pas: 0012_invoice_drafts.
 
@@ -1380,7 +1380,7 @@ preturile si TVA sunt validate prin aceeasi functie ca la creare; serverul recal
 toate sumele. Autorul initial si starea nu pot fi schimbate din cerere.
 
 Serverul blocheaza randul facturii si compara version cu valoarea actuala.
-O versiune veche sau o stare diferita de DRAFT produce 409; clientul reincarca
+O versiune veche sau o stare care nu permite corectarea produce 409; clientul reincarca
 documentul inainte de a incerca din nou. O schimbare efectiva creste version cu 1.
 O cerere identica dupa normalizare, cu aceleasi ID-uri si ordine, nu modifica
 versiunea si nu adauga audit. Toate modificarile si auditul se salveaza atomic.
@@ -1395,3 +1395,842 @@ inclusiv cele 37 existente de creare si consultare si 19 noi pentru editare.
 Migrarea 0013 este aplicata; flask db check nu detecteaza diferente.
 Suita completa a fost rulata la pasul anterior (687 de teste); in acest pas
 au fost rulate testele modulului modificat.
+
+## Alocarea facturilor la receptii
+
+Contabilitatea poate lega liniile unei facturi DRAFT, BLOCKED sau VERIFIED de cantitatile acceptate in
+receptii confirmate. POST /api/invoices/{id}/allocations necesita cookie JWT,
+X-CSRF-TOKEN si un corp de forma:
+
+```json
+{
+  "version": 1,
+  "reason": "Marfa acceptata pentru factura",
+  "items": [
+    {"invoice_item_id": 1, "receipt_item_id": 1, "quantity": "4.000"}
+  ]
+}
+```
+
+Identificatorii trebuie inlocuiti cu cei ai liniilor existente. Cantitatea este
+text zecimal pozitiv, cu maximum 3 zecimale. Cererea permite 1-100 de alocari;
+aceeasi pereche de linii nu se repeta in acelasi corp. Cererile succesive adauga
+alocari; nu inlocuiesc lista existenta. Fiecare salvare creste versiunea facturii.
+Retrimiterea aceleiasi cereri cu versiunea veche produce 409.
+
+GET /api/invoices/{id}/allocations?page=1&per_page=20 afiseaza alocarile facturii,
+versiunea, totalul si paginarea. Ambele rute sunt exclusiv pentru CONTABILITATE,
+inclusiv administratorul primeste 403. Raspunsurile au Cache-Control: no-store.
+
+Validarile urmaresc lantul factura -> receptie -> comanda:
+
+- Receptia trebuie sa fie confirmata, cu momentul si autorul confirmarii.
+- Pozitia receptiei trebuie sa fie legata de o comanda CONFIRMED sau CLOSED,
+  care pastreaza momentul confirmarii.
+- Furnizorul, produsul si unitatea trebuie sa corespunda documentelor.
+- Moneda, pretul unitar si TVA facturate trebuie sa corespunda exact comenzii.
+  Nu aplicam tolerante sau conversii implicite.
+- Suma alocarilor ACTIVE, inclusiv cele ale altor facturi si cele din aceeasi
+  cerere, nu poate depasi cantitatea acceptata a receptiei.
+- Suma alocata unei linii de factura nu poate depasi cantitatea facturata.
+
+Exemplu: din 10 bucati sosite, 6 acceptate, 3 in asteptare si 1 respinsa, numai
+6 pot justifica facturi. Daca o factura foloseste 4, alte facturi pot folosi cel
+mult 2 din acea receptie. O linie de factura poate folosi mai multe receptii;
+o factura poate acoperi mai multe comenzi compatibile ale aceluiasi furnizor.
+Dezactivarea ulterioara a catalogului nu invalideaza documentele istorice compatibile.
+
+Factura este blocata cu SELECT FOR UPDATE; pozitiile receptiei sunt blocate in
+ordinea ID-urilor, inainte de calculul sumelor deja alocate. Doua facturi diferite
+nu pot rezerva simultan aceeasi cantitate acceptata. Alocarile, cresterea versiunii
+si auditul sunt salvate in aceeasi tranzactie; orice eroare anuleaza intreaga cerere.
+Testul concurent foloseste doua conturi, doua facturi si conexiuni PostgreSQL distincte.
+
+Alocarea revine la DRAFT, iar stocul nu este modificat. Verificarea si blocajele
+persistente, conversia valutara, aprobarea si plata sunt descrise mai jos.
+Diferentele la alocare sunt raportate ca 409, fara alocari partiale ascunse.
+Alocarile create sunt ACTIVE. Eliberarea este disponibila prin fluxul descris
+mai jos. Editarea unei facturi cu alocari ACTIVE este blocata integral cu 409.
+
+Migrarea acestui pas: 0014_invoice_allocations.
+
+Verificare dupa alocari: 740 de teste trecute cu PostgreSQL si Mailpit locale,
+inclusiv concurenta intre facturi si toate testarile existente. Sunt 34 de teste
+noi pentru alocari. Migrarea este aplicata; flask db check nu detecteaza diferente.
+
+## Eliberarea alocarilor gresite
+
+POST /api/invoices/{id}/allocations/release este disponibil exclusiv contabilitatii,
+cu cookie JWT, protectie CSRF si corp JSON:
+
+```json
+{
+  "version": 2,
+  "reason": "Receptie aleasa gresit",
+  "allocation_ids": [1, 2]
+}
+```
+
+Trimite identificatorii reali ai alocarilor si versiunea actuala a facturii.
+Cererea accepta 1-100 de ID-uri intregi pozitive, distincte. Factura trebuie sa fie
+DRAFT, BLOCKED sau VERIFIED, iar toate alocarile trebuie sa apartina ei si sa fie ACTIVE.
+Fiecare alocare selectata este eliberata integral; pentru schimbarea cantitatii,
+elibereaza alocarea veche si creeaza una noua cu valoarea corecta.
+
+Serverul schimba starea in RELEASED si salveaza released_at. Cantitatea initiala,
+legaturile si randul alocarii se pastreaza. Auditul RELEASE contine autorul,
+motivul, valorile initiale si finale. Version creste o singura data pentru intregul
+lot. O versiune veche sau o alocare deja eliberata produce 409; nu are loc o a doua
+eliberare. ID-urile inexistente sau de pe alta factura produc 400.
+
+Alocarile RELEASED raman vizibile in lista, inclusiv momentul eliberarii,
+dar nu mai consuma cantitatea acceptata disponibila. Exemplu: dupa eliberarea
+unei alocari de 4 bucati din 6 acceptate, toate cele 6 redevin disponibile daca
+nu exista alte alocari ACTIVE. Stocul fizic nu se modifica.
+
+Eliberarea foloseste aceeasi ordine a blocarilor ca alocarea: utilizator, factura,
+pozitii de receptie in ordinea ID-urilor; apoi blocheaza alocarile selectate.
+Schimbarile, versiunea si auditul sunt atomice. O eroare anuleaza intregul lot.
+
+Dupa eliberarea tuturor alocarilor active, antetul si valorile liniilor facturii
+pot fi corectate prin PATCH. Liniile care au istoric de alocari nu pot fi eliminate;
+pastram legaturile pentru urmarirea ulterioara. Produsul unei linii existente ramane
+fix, conform regulii de editare deja implementate. Liniile fara istoric pot fi
+eliminate normal. Factura ramane DRAFT; aprobarea si plata sunt pasi ulteriori.
+
+Acest pas foloseste coloanele existente; nu necesita migrare noua.
+
+Verificare pentru eliberare: 115 teste trecute pentru facturi, alocari si eliberare,
+inclusiv concurenta pe conexiuni PostgreSQL distincte. Sunt 25 de teste noi.
+Suita completa a fost verificata la pasul anterior (740 de teste); acest pas
+ruleaza modulele afectate, fara sa retrimita emailuri.
+
+## Verificarea facturilor si motivele de blocare
+
+POST /api/invoices/{id}/verify necesita rol CONTABILITATE, JWT, CSRF si JSON
+cu un singur camp: {"version": 2}, folosind versiunea curenta a facturii.
+Starea trebuie sa fie DRAFT, BLOCKED sau VERIFIED. O versiune veche produce 409.
+Verificarea salveaza rezultatul chiar daca exista diferente: raspunde 200,
+cu invoice si lista issues a problemelor deschise. Nu este un raspuns de aprobare.
+
+Sunt reverificate pe datele curente:
+
+- Existenta a cel putin unei linii si acoperirea exacta prin alocari ACTIVE.
+- Receptiile confirmate, comenzile confirmate sau inchise si legaturile lor.
+- Suma alocarilor active ale tuturor facturilor fata de cantitatile acceptate.
+- Furnizorul, produsul, unitatea, moneda, pretul si TVA, fara tolerante implicite.
+- Netul, TVA si totalul fiecarei linii, apoi totalurile antetului, cu Decimal.
+
+Orice problema blocheaza intreaga factura in BLOCKED. O factura RON conforma
+devine VERIFIED. Pentru EUR se preia cursul istoric BNR sau se reutilizeaza cel
+pastrat local. In lipsa lui se deschide EXCHANGE_RATE_MISSING. Nu folosim curs fictiv
+sau cursul zilei curente pentru o factura din alta zi.
+VERIFIED reprezinta rezultatul verificarilor implementate, nu aprobare sau plata.
+Reconcilierea cu sume declarate separat pe documentul furnizorului si atasamentele
+nu sunt implementate inca; inregistrarea actuala calculeaza sumele din linii.
+
+Codurile posibile sunt NO_ITEMS, QUANTITY_NOT_COVERED, SOURCE_MISSING,
+RECEIPT_NOT_CONFIRMED, ORDER_NOT_CONFIRMED, RECEIPT_OVERALLOCATED,
+IDENTITY_MISMATCH, TERMS_MISMATCH, LINE_TOTAL_MISMATCH, INVOICE_TOTAL_MISMATCH
+EXCHANGE_RATE_MISSING si FX_CONVERSION_OVERFLOW. Fiecare motiv salveaza factura, optional linia,
+detalii, rolul responsabil si opened_at. Responsabilul indica echipa necesara
+clarificarii; accesul API la facturi ramane exclusiv contabilitatii in acest pas.
+
+GET /api/invoices/{id}/issues?page=1&per_page=20 returneaza toate motivele,
+inclusiv istoricul, cu resolved_at si resolution. O reverificare pastreaza
+identitatea si data problemelor inca prezente; nu creeaza duplicate deschise.
+Problemele care dispar sunt inchise cu RESOLVED si audit. Fiecare verificare
+creste versiunea facturii si inregistreaza un eveniment VERIFY.
+
+O schimbare efectiva a facturii sau a alocarilor invalideaza verificarea:
+starea revine la DRAFT, iar motivele vechi sunt inchise cu SUPERSEDED.
+Acest marcaj inseamna ca rezultatul anterior este depasit, nu ca problema a fost
+rezolvata. Este necesara o noua verificare. O salvare fara modificari pastreaza
+starea si versiunea. Liniile cu istoric de verificare sau alocare nu pot fi sterse;
+valorile lor pot fi corectate dupa eliberarea alocarilor active.
+
+Verificarea blocheaza factura si pozitiile receptiilor in aceeasi ordine ca
+alocarea, inainte de calculul disponibilului. Starea, versiunea, motivele si
+auditul sunt salvate atomic. Nu exista o actiune de ignorare manuala a blocajelor.
+Migrarea 0015_invoice_verification adauga invoice_issues si starile BLOCKED/VERIFIED.
+Notificarile email pentru blocaje, aprobarea si plata sunt descrise mai jos.
+
+Verificare dupa acest pas: 791 de teste trecute cu PostgreSQL si Mailpit locale,
+inclusiv 26 de teste noi pentru verificarea facturilor. Migrarea 0015 este aplicata;
+flask db check nu detecteaza diferente intre modele si schema.
+
+## Cursul istoric si conversia in RON
+
+La POST /api/invoices/{id}/verify, facturile EUR folosesc automat cursul BNR
+din data exacta a facturii. Sursa este arhiva anuala oficiala:
+https://curs.bnr.ro/files/xml/years/nbrfxrates2025.xml (anul este ales din data facturii).
+Datele sunt descarcate prin HTTPS cu validarea certificatelor activa, limita de
+2 MB, timeout 8 secunde si redirectionari refuzate. Adresa nu vine din cererea clientului.
+Pe Windows folosim truststore pentru certificatele sistemului; pe Linux folosim
+contextul SSL standard. Nu exista o optiune de dezactivare a verificarii TLS.
+
+Parserul accepta namespace-urile BNR istorice http si https, verifica emitentul,
+moneda de baza RON, data exacta si o singura valoare EUR pozitiva. Raspunsurile
+HTML, XML invalid, DTD/entitati, multiplicatori EUR neasteptati si precizia excesiva
+sunt respinse. Cursul nu este convertit prin float.
+
+La prima preluare, cursul este salvat in exchange_rates, impreuna cu sursa,
+adresa, momentul preluarii si hashul SHA-256 al XML-ului. Unicitatea BNR/EUR/data
+este impusa in PostgreSQL. Cursurile existente sunt reutilizate fara acces la retea;
+un trigger interzice modificarea sau stergerea lor. Importul genereaza audit FETCH,
+cu procesul bnr_import.
+
+Factura pastreaza exchange_rate_id, exchange_rate_value (6 zecimale),
+exchange_rate_date, exchange_rate_source si total_ron (2 zecimale). Formula este
+total_amount * exchange_rate_value, rotunjita cu ROUND_HALF_UP. RON foloseste
+curs 1, sursa IDENTITY si nu necesita acces la BNR. Moneda si pretul fata de
+comanda sunt verificate separat; conversia nu face compatibile preturi diferite.
+
+Pentru zile fara publicare folosim deocamdata regula stricta: factura ramane
+BLOCKED cu EXCHANGE_RATE_MISSING. Nu alegem automat vineri pentru o factura de
+sambata. Politica folosirii ultimului curs anterior ramane o decizie de business
+de confirmat. Aceeasi protectie se aplica la erori de retea sau raspunsuri invalide.
+O reverificare reincearca preluarea; daca reuseste, motivul se inchide prin fluxul
+normal. O suma convertita prea mare produce FX_CONVERSION_OVERFLOW, fara conversie.
+
+O modificare efectiva a facturii sau alocarilor sterge conversia de pe factura si
+invalideaza verificarea; cursul istoric din catalog ramane pastrat. O simpla salvare
+fara schimbari nu modifica conversia. Cursul si conversia, motivele si auditul se
+salveaza atomic; o eroare la audit anuleaza inclusiv un import nou de curs.
+
+Migrarea 0016_exchange_rates adauga catalogul istoric, campurile facturii si
+constrangerea care impune o conversie completa sau campuri toate necompletate.
+Clientul nu poate trimite un curs manual prin creare sau editare.
+
+Verificare dupa acest pas: 816 teste trecute, inclusiv 25 noi pentru cursuri,
+cu PostgreSQL si Mailpit locale. Migrarea 0016 este aplicata si flask db check
+nu detecteaza diferente. Importul real HTTPS a fost verificat separat si a pastrat
+in baza cursul BNR EUR/RON 4.974900 pentru 2025-01-03. Testele automate folosesc
+raspunsuri controlate, fara dependenta de disponibilitatea BNR.
+
+## Aprobarea explicita a facturilor
+
+POST /api/invoices/{id}/approve este disponibil exclusiv contabilitatii, cu
+JWT, protectie CSRF si corp JSON:
+
+```json
+{
+  "version": 3,
+  "reason": "Aprobare dupa verificarea documentelor"
+}
+```
+
+Factura trebuie sa fie VERIFIED, iar versiunea trebuie sa fie cea curenta.
+Serverul repeta verificarile existente sub aceleasi blocari ale facturii si
+pozitiilor de receptie. Nu exista commit intermediar intre reverificare si aprobare.
+Regulile cantitative, preturile, TVA, totalurile si cursul istoric sunt comune cu
+operatia verify; nu pastram un al doilea set de reguli pentru aprobare.
+
+Daca toate controalele trec, raspunsul este 200, approved=true, iar starea devine
+APPROVED. approved_by_id si approved_at sunt stabilite de server. Versiunea creste
+cu 1, iar auditul APPROVE pastreaza autorul, motivul si starea initiala/finala.
+Cursul BNR existent este reutilizat local; conversia ramane pastrata pe factura.
+
+Daca reverificarea gaseste o problema noua, factura devine BLOCKED, versiunea
+creste, iar motivele sunt salvate si returnate cu approved=false si HTTP 409.
+Acest raspuns pastreaza rezultatul controlului; nu abandoneaza blocajele descoperite.
+O versiune veche, o alta stare sau o aprobare repetata produce 409 fara o noua aprobare.
+Erorile de persistenta sau audit anuleaza intreaga operatie.
+
+Pentru o factura APPROVED, editarea, crearea/eliberarea alocarilor si verificarea
+obisnuita sunt respinse. Autorul, momentul si conversia aprobata nu pot fi impuse
+din cerere. Nu exista inca un flux de revocare/corectare a aprobarii; plata este descrisa mai jos.
+Aprobarea este o decizie interna; nu efectueaza un transfer bancar.
+
+Migrarea 0017_invoice_approval adauga autorul si momentul aprobarii, starea
+APPROVED si o constrangere PostgreSQL: aprobarea necesita autor, moment si total RON.
+Starile anterioare nu pot avea metadate de aprobare completate.
+
+Validare pentru acest pas: 70 de teste tintite trecute (67 pentru aprobare,
+verificare si cursuri, plus 3 de concurenta), dintre care 17 noi. Nu a fost
+rerulata suita completa. Doua aprobari concurente, cu conturi distincte si conexiuni
+PostgreSQL separate, produc o singura aprobare si un singur eveniment APPROVE.
+Migrarea este aplicata; flask db check nu detecteaza diferente.
+
+## Inregistrarea platii unei facturi
+
+POST /api/invoices/{id}/pay este exclusiv pentru contabilitate, cu cookie JWT
+si antet X-CSRF-TOKEN. Exemplu de JSON (foloseste versiunea actuala, momentul real
+al platii si referinta documentului de plata):
+
+```json
+{
+  "version": 4,
+  "reason": "Plata conform extrasului",
+  "paid_at": "2026-10-21T10:30:00+03:00",
+  "payment_reference": "OP-123"
+}
+```
+
+Factura trebuie sa fie APPROVED, cu aprobare si conversie complete, fara motive
+de blocare deschise. Aceasta versiune tine evidenta unei singure plati integrale,
+in moneda si pentru suma originala a facturii; nu accepta un amount trimis de client.
+Nu sunt implementate avansuri, transe, comisioane sau diferente de curs la decontare.
+Nu se efectueaza un transfer bancar si nu exista confirmare automata de la banca.
+
+paid_at necesita data, ora si fus orar explicit; este normalizat in UTC. Regula
+interna este ca plata sa nu preceada aprobarea si sa nu fie in viitor fata de
+ceasul PostgreSQL. Referinta are 1-120 de caractere dupa eliminarea spatiilor
+exterioare si nu permite caractere de control. Motivul este obligatoriu.
+
+Serverul blocheaza factura, verifica versiunea si schimba starea in PAID.
+Salveaza paid_at, payment_reference si paid_by_id (utilizatorul autentificat),
+creste versiunea si adauga audit PAY. Data platii este cea declarata; momentul
+inregistrarii este cel al evenimentului de audit. Aprobarea, cursul si total_ron
+raman pastrate. Stocul si alocarile nu sunt modificate.
+
+O factura deja platita sau o versiune veche produce 409. Cererile concurente nu
+pot inregistra doua plati pentru aceeasi factura. O eroare la audit anuleaza intreaga
+operatie. Factura PAID ramane consultabila, dar editarea, reverificarea, aprobarea
+repetata si eliberarea alocarilor sunt respinse; corectarea platii necesita un flux
+separat, care nu este implementat inca. Nu exista o regula de unicitate globala a
+referintei, deoarece acelasi ordin bancar poate acoperi mai multe facturi.
+
+Migrarea 0018_invoice_payment adauga campurile platii si starea PAID. Constrangerile
+PostgreSQL cer metadate complete pentru PAID si pastreaza obligatorie aprobarea.
+
+Validare pentru acest pas: 45 de teste tintite trecute (41 pentru plati si aprobari,
+plus 4 de concurenta), dintre care 26 noi, in aproximativ 21 de secunde.
+Suita completa nu a fost rerulata. Migrarea este aplicata; flask db check nu
+detecteaza diferente intre modele si schema.
+
+## Sumar periodic pentru facturile blocate
+
+Workerul zilnic existent proceseaza acum doua tipuri: OVERDUE pentru intarzieri si
+BLOCKED_INVOICES pentru facturi blocate. Ora ramane EMAIL_DAILY_TIME, implicit
+08:00 Europe/Bucharest. Procesul trebuie pornit separat; aplicatia Flask nu il
+porneste automat si nu am lasat un worker permanent in fundal.
+
+Fiecare cont activ CONTABILITATE primeste un singur sumar pe zi cu facturile
+BLOCKED care au motive deschise. Sunt incluse referinta, furnizorul, data facturii,
+codul, detaliile si rolul responsabil de clarificare. Nu includem totaluri sau preturi.
+Facturile din alte stari si motivele RESOLVED/SUPERSEDED sunt excluse. Nu trimitem
+mesaje goale. Daca nu exista conturi active de contabilitate, numarul motivelor
+fara destinatar este raportat; nu folosim administratorul ca destinatar implicit.
+
+Pentru previzualizare, din backend:
+
+```powershell
+.\.venv\Scripts\python.exe -m flask --app app preview-blocked-invoice-emails
+```
+
+Pentru trimitere manuala exclusiv in Mailpit local:
+
+```powershell
+.\.venv\Scripts\python.exe -m flask --app app send-blocked-invoice-emails-local
+```
+
+Programarea existenta, run-notification-worker, trimite ambele tipuri. Comanda
+send-overdue-emails-local ramane limitata la intarzieri. list-email-deliveries
+afiseaza si tipul mesajului, alaturi de stare si incercari.
+
+Jurnalul pastreaza unicitatea tip + transport + zi + utilizator. Repornirea sau
+reluarea nu retrimite mesajele SENT. Inainte de preluarea pentru SMTP se recontroleaza
+rolul, starea si emailul contului, plus hashul sumarului reconstruit pentru lot.
+Un sumar schimbat este marcat SKIPPED si asteapta urmatorul lot zilnic; nu este
+rescris pe ascuns. Problemele aparute dupa finalizarea lotului intra in ziua urmatoare.
+
+Se reutilizeaza maximum 3 incercari pentru erori SMTP certe, cu termenul de
+reincercare persistent folosit de worker. SENDING si UNKNOWN necesita verificare
+manuala si nu sunt retrimise automat. Tipurile sunt filtrate separat la trimitere,
+la numararea starilor si a mesajelor care mai pot fi reluate. Workerul combina
+rezultatele si nu inchide ziua daca unul dintre tipuri necesita reincercari.
+
+Transportul este in continuare exclusiv Mailpit pe 127.0.0.1. Nu au fost trimise
+emailuri externe. Mesajele noi au audit cu procesul blocked_invoice_email_local.
+Migrarea 0019_blocked_invoice_emails permite noul tip in jurnalul existent.
+
+Validare pentru acest pas: 83 de teste distincte ale notificarilor, workerului,
+SMTP-ului si concurentei au trecut, inclusiv 20 noi, in aproximativ 23 de secunde
+de testare. Capturarea unui sumar real in Mailpit si prevenirea duplicarii lui
+au fost verificate. Migrarea este aplicata, fara diferente raportate de flask db check.
+Suita completa nu a fost rerulata.
+
+## Interfata React: primul pas
+
+Frontendul foloseste React si Vite, cu portocaliu inspirat de paleta RURIS,
+grafit si fundaluri deschise. Fonturile si pictogramele sunt livrate local prin
+dependintele npm; browserul nu depinde de Google Fonts. Layoutul include login,
+meniu pe roluri, privire de ansamblu, liste paginate si detalii de document.
+
+Sunt conectate la API: autentificarea, verificarea sesiunii, logoutul, comenzile,
+receptiile, facturile (doar contabilitate), stocul, produsele, furnizorii,
+intarzierile si utilizatorii (doar administrator). Administratorul nu primeste
+acces implicit la operatiile celorlalte echipe. Numaratorile folosesc totalurile
+API, iar tabelele folosesc datele reale, fara seturi demonstrative in aplicatie.
+Capturile automate din test-results folosesc separat raspunsuri de test.
+
+Interfata permite consultarea, crearea si confirmarea comenzilor; formularele de editare,
+alocare, verificare, aprobare si plata urmeaza in pasi separati. Cautarea se aplica
+doar paginii curente, lucru indicat in interfata. Furnizorii din documente sunt
+momentan identificati prin ID. Sectiunea rapida afiseaza primele inregistrari
+returnate de API; nu introduce o sortare noua fata de backend.
+
+Porneste PostgreSQL prin Docker, apoi backendul intr-un terminal:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m flask --app app run --host 127.0.0.1 --port 5000
+```
+
+Pentru frontend, instaleaza Node.js LTS (minimum 22.12) si ruleaza separat:
+
+```powershell
+cd frontend
+npm ci
+npm run dev
+```
+
+Deschide http://127.0.0.1:5173/ si foloseste un cont existent. Nu exista conturi
+demonstrative sau parole incluse in frontend. JWT_COOKIE_SECURE trebuie sa fie
+false pentru dezvoltarea locala pe HTTP, conform configurarii existente.
+
+Pe acest PC a fost pregatit si Node.js 24 portabil in .tools (exclus din Git).
+Din radacina proiectului, frontend/start.ps1 foloseste Node instalat sau copia
+portabila, fara sa modifice permanent PATH. Dupa mutarea pe alt PC, instaleaza
+Node LTS si foloseste npm ci; copia portabila nu face parte din repository.
+
+Vite directioneaza /api catre Flask pe 127.0.0.1:5000. Loginul recunoaste originile
+locale 127.0.0.1:5173 si localhost:5173 prin configurarea proxy; nu a fost relaxata
+verificarea originii din Flask si nu a fost adaugat CORS general. JWT ramane in
+cookie HttpOnly; React nu il copiaza in localStorage sau sessionStorage.
+Pentru operatiile de scriere, api.js transmite X-CSRF-TOKEN din cookie-ul CSRF.
+La expirarea sesiunii, zona protejata este demontata si se afiseaza loginul.
+
+Navigarea ramane locala in React in acest prim pas; reimprospatarea paginii
+restabileste sesiunea prin /api/auth/me si deschide privirea de ansamblu.
+Meniul ascunde operatiile nepermise, iar autorizarea efectiva ramane in backend.
+
+Validare: npm run build a reusit si 9 teste Playwright au trecut in Edge, in
+aproximativ 7 secunde. Sunt acoperite cele patru roluri, CSRF la logout, sesiunea
+expirata, login respins, detaliile documentului, cautarea si meniul mobil.
+Testele de browser folosesc API simulat pentru scenarii deterministe; separat,
+proxy-ul a fost verificat cu Flask real prin health si validarea corpului de login,
+fara autentificari sau date modificate. Suita backend nu a fost rerulata.
+
+Pentru build si testare frontend:
+
+```powershell
+npm run build
+npm test
+```
+
+Pe Windows testele folosesc Microsoft Edge instalat; pe alte sisteme, instaleaza
+browserul Playwright prin npx playwright install chromium. Fisierele dist,
+node_modules, test-results si playwright-report sunt excluse din Git.
+
+## Interfata: comanda noua si texte generale
+
+Pagina de autentificare si panoul principal folosesc titlul Portal Intern RURIS.
+Textele promotionale, explicatiile despre cele trei echipe si schema de prezentare
+a fluxului au fost eliminate. Etichetele si mesajele raman scurte.
+
+ACHIZITII are actiunea Comanda noua pe pagina principala si in Comenzi. Formularul
+include furnizor, moneda RON/EUR si 1-100 de pozitii, fiecare cu produs, cantitate,
+pret unitar, TVA si termen. Produsele pot fi adaugate sau eliminate. Se incarca
+toate paginile catalogului, apoi sunt afisate numai intrarile active.
+
+Salveaza ciorna foloseste POST /api/purchase-orders si protectia CSRF existenta.
+Formularul accepta punct sau virgula zecimala si transmite cantitatea, pretul si TVA
+ca texte cu punct, fara conversie monetara prin float. Cantitatea permite maximum
+3 zecimale, pretul 4 si TVA 2, in limitele backendului. Nu se confirma automat comanda.
+La succes se deschide lista si se afiseaza numarul comenzii salvate.
+
+Campurile sunt pastrate la respingerea validarii de catre server. In timpul salvarii
+formularul este blocat. Daca reteaua cade si rezultatul nu poate fi confirmat,
+repetarea salvarii este oprita pana la verificarea listei. La expirarea sesiunii
+se revine la autentificare. Restul rolurilor nu primesc actiunea de creare;
+autorizarea efectiva ramane in Flask.
+
+Validare: build reusit si 18 teste de browser trecute, inclusiv 9 noi pentru
+creare, autorizare, catalog paginat/inactiv, validari, zecimale exacte, CSRF,
+erori de server, mobil si rezultat de retea incert. Ultima rulare completa
+a testelor frontend a durat aproximativ 12 secunde. Backendul nu a fost modificat
+si suita lui nu a fost rerulata. Capturile de test folosesc date simulate.
+
+## Interfata: utilizator nou
+
+Administratorul are butonul Utilizator nou in pagina principala si in Utilizatori.
+Formularul cere nume, email, rol, parola si confirmarea parolei. Rolurile afisate
+sunt Achizitii, Depozit si Contabilitate; API primeste codurile existente.
+Crearea unui alt administrator nu este oferita de acest formular.
+
+Creeaza contul trimite POST /api/users cu CSRF. Dupa succes se afiseaza lista si
+mesajul de confirmare. Contul este activ conform regulii backendului existent.
+Parola are minimum 12 caractere si maximum 72 de octeti UTF-8; confirmarea este
+verificata local si nu este trimisa in cerere. Hashul bcrypt si auditul sunt
+gestionate de Flask. Parola nu este pastrata in stocarea browserului si este
+stearsa din formular dupa succes sau dupa un rezultat de retea incert.
+
+Emailul duplicat si erorile serverului sunt afisate in formular. Butonul de salvare
+este blocat pe durata cererii si dupa un rezultat incert, pentru verificarea listei
+inainte de repetare. Numai administratorul vede actiunea; backendul verifica
+independent permisiunea. Nu au fost create conturi demonstrative in baza reala.
+
+Validare: build reusit si 10 teste tintite de browser trecute, dintre care 9 noi,
+in aproximativ 7 secunde. Sunt acoperite cele trei roluri, CSRF, parola si limita
+UTF-8, emailul duplicat, accesul, mobilul si rezultatul incert. Testele de browser
+folosesc raspunsuri simulate; backendul de creare a conturilor nu a fost modificat.
+
+## Interfata: furnizori si produse
+
+Din contul ACHIZITII, Furnizori are butonul Furnizor nou, iar Produse are
+Produs nou. Furnizorul necesita denumire, tara (implicit RO) si cod fiscal;
+emailul este optional. Produsul necesita denumire, cod unic si unitate de masura
+(BUC, KG, L, M, M2 sau M3). Conturile celorlalte roluri nu primesc aceste actiuni.
+
+Formularele folosesc POST /api/suppliers si POST /api/products cu CSRF. Codul
+produsului este trimis in majuscule; identificarea fiscala si unicitatea sunt
+verificate de backend. La succes se actualizeaza lista; inregistrarile active
+devin disponibile la deschiderea formularului de comanda. Un duplicat afiseaza
+eroarea serverului si pastreaza formularul. Un rezultat de retea incert blocheaza
+repetarea salvarii pana la verificarea listei.
+
+Ordinea pentru prima utilizare este: administratorul creeaza contul de Achizitii,
+utilizatorul adauga furnizorii si produsele, apoi creeaza o comanda. Nu au fost
+introduse automat date demonstrative in baza reala.
+
+Validare: build reusit si 35 de teste de browser trecute, inclusiv 8 noi, in
+aproximativ 22 de secunde. Scenariul pornind de la catalog gol pana la comanda
+salvata este verificat prin raspunsuri API simulate. Backendul nu a fost modificat
+si suita lui nu a fost rerulata.
+
+## Interfata: confirmarea comenzii
+
+Din contul ACHIZITII, deschide Comenzi si detaliile unei ciorne, apoi apasa
+Confirma comanda. Actiunea este disponibila si in detaliile deschise din pagina
+principala. POST /api/purchase-orders/{id}/confirm transmite versiunea afisata
+si tokenul CSRF; backendul existent verifica rolul, versiunea si catalogul activ,
+apoi salveaza confirmarea si auditul in aceeasi tranzactie. Confirmarea nu trimite
+comanda prin email furnizorului si nu modifica stocul.
+
+La succes se afiseaza starea Confirmata, noua versiune si mesajul de confirmare,
+iar lista se reincarca. Depozitul si contabilitatea pot consulta apoi comanda
+prin regulile de vizibilitate existente. Butonul nu apare pentru celelalte roluri
+sau pentru documentele deja confirmate.
+
+Pe durata cererii, confirmarea si inchiderea dialogului sunt blocate. Un conflict
+de versiune sau un rezultat incert solicita Actualizeaza datele inainte de o noua
+incercare; actualizarea doar consulta documentul, fara sa repete confirmarea.
+Expirarea sesiunii elimina dialogul si readuce autentificarea.
+
+Validare: build reusit si 16 teste tintite de browser trecute, dintre care 11 noi
+pentru confirmare, CSRF, versiune, acces, lista actualizata, cerere in curs,
+rezultat incert, erori, mobil si sesiune expirata. Testele folosesc API simulat;
+nu au fost confirmate comenzi reale automat. Backendul nu a fost modificat si
+suita lui nu a fost rerulata.
+
+## Interfata: receptie noua
+
+Contul DEPOZIT are butonul Receptie noua in pagina principala si in Receptii.
+Formularul incarca toate paginile comenzilor vizibile si permite selectarea numai
+a comenzilor CONFIRMED. Pentru comanda aleasa, endpointul delivery furnizeaza
+pozitiile, cantitatile comandate si restul de livrat, fara preturi.
+
+Utilizatorul introduce documentul de livrare, data si ora locala a browserului,
+apoi cantitatile efectiv sosite. Campurile de cantitate necompletate sunt omise,
+pentru livrari partiale. Cantitatile pozitive accepta punct sau virgula si maximum
+3 zecimale; API primeste texte zecimale si identificatorii pozitiilor de comanda.
+Surplusul poate fi consemnat fizic, fara acceptarea lui automata. Schimbarea
+comenzii sterge cantitatile introduse pentru comanda anterioara.
+
+Salveaza ciorna trimite POST /api/receipts cu CSRF, purchase_order_id,
+delivery_reference, received_at convertit in UTC si items. Backendul existent
+verifica rolul si comanda, salveaza receptia DRAFT cu marfa in asteptare si audit.
+Stocul nu se modifica. Dupa succes se reincarca lista si se afiseaza numarul
+receptiei. Confirmarea si clasificarea marfii vor fi adaugate separat in interfata.
+
+Erorile de validare pastreaza formularul. Un rezultat incert de retea sau server
+blocheaza retrimiterea si ofera Vezi receptiile. Incarcarea produselor poate fi
+reincercata, iar expirarea sesiunii readuce autentificarea. Celelalte roluri nu
+primesc butonul de creare; autorizarea efectiva ramane in backend.
+
+Validare: build reusit si 18 teste tintite de browser trecute in aproximativ
+12 secunde, dintre care 13 noi pentru receptii. Sunt acoperite livrarea partiala,
+surplusul, mai multe pozitii, zecimalele, UTC, CSRF, paginarea, comenzile neeligibile,
+catalogul gol, schimbarea comenzii, erorile, mobilul, accesul si sesiunea expirata.
+Testele folosesc API simulat; nu au fost create receptii reale automat. Backendul
+nu a fost modificat si suita lui nu a fost rerulata.
+
+Corectie: GET /api/purchase-orders/{id}/delivery returneaza obiectul in campul
+delivery. ReceiptForm citeste data.delivery; citirea directa a raspunsului afisa
+eronat ca o comanda confirmata nu mai este deschisa. Datele simulate din teste
+respecta acum structura rutei reale. Eroarea a fost reprodusa inainte de corectie;
+dupa corectie, buildul si toate cele 14 teste pentru crearea receptiilor au trecut,
+inclusiv refuzul unei comenzi inchise efectiv. Nu au fost modificate comenzi reale.
+
+## Interfata: confirmarea receptiei
+
+Din contul DEPOZIT, deschide detaliile unei receptii DRAFT. Formularul permite
+clasificarea fiecarei pozitii in Acceptat, Respins si In asteptare, plus observatii
+obligatorii. Initial, cantitatea sosita este propusa ca acceptata, iar celelalte
+doua cantitati sunt zero; utilizatorul verifica si modifica valorile inainte de
+confirmare. Suma celor trei trebuie sa fie egala cu cantitatea sosita.
+
+ReceiptConfirmation foloseste BigInt cu scalare la miimi pentru a compara exact
+cantitatile cu maximum 3 zecimale. POST /api/receipts/{id}/confirm transmite CSRF,
+version, reason si items, cu identificatorii pozitiilor de receptie si cantitatile
+ca texte zecimale. Raspunsul real este citit din campul receipt. Backendul existent
+verifica restul comandat si salveaza clasificarea, stocul si auditul atomic.
+
+La succes, detaliile afiseaza starea Confirmata, noua versiune si toate cantitatile,
+iar lista se reincarca. La deschiderea Stoc sunt citite soldurile actuale. Pentru
+100 comandate si 77 sosite, acceptarea celor 77 creste stocul cu 77 si lasa 23
+de livrat; comanda ramane CONFIRMED, cu livrare partiala. Marfa respinsa si cea in
+asteptare nu intra in stoc. Rezolvarea ulterioara a marfii in asteptare necesita
+inca un flux separat.
+
+Conflictele de versiune si rezultatele incerte cer actualizarea datelor inainte
+de retrimitere. Dialogul nu poate fi inchis cat timp confirmarea este in curs.
+Doar DEPOZIT vede formularul, iar receptiile confirmate nu mai pot fi confirmate
+din nou. A fost corectata si depasirea latimii pe mobil cauzata de eticheta ascunsa
+a tabelului: containerul cu derulare stabileste acum pozitionarea relativa.
+
+Validare: build final reusit si 24 de teste tintite de browser trecute, dintre
+care 12 noi pentru confirmarea receptiei. Sunt acoperite acceptarea celor 77,
+clasificarea mixta, precizia zecimala, mai multe pozitii, validarea, rolurile,
+versiunile, rezultatul incert, cererea in curs, mobilul si expirarea sesiunii.
+Testele folosesc raspunsuri API simulate, inclusiv efectul asupra soldului; nu au
+fost confirmate receptii reale automat. Backendul nu a fost modificat si suita
+lui nu a fost rerulata.
+
+## Situatia livrarii in lista comenzilor
+
+Comenzi afiseaza coloana Livrare: Nelivrata, Partiala sau Completa, separat de
+starea documentului. Ciornele afiseaza o liniuta. Calculul foloseste exclusiv
+cantitatile acceptate din receptii confirmate. Complet inseamna ca toate
+pozitiile sunt acoperite; nu se insumeaza cantitati din unitati diferite.
+
+GET /api/purchase-orders adauga delivery_status printr-o interogare agregata
+pentru comenzile paginii, fara cate o cerere pentru fiecare rand. GET
+/api/purchase-orders/{id}/delivery adauga acelasi sumar si pastreaza cantitatile
+pe pozitii. Detaliile unei comenzi confirmate sau inchise afiseaza Comandat,
+Acceptat, Rest de livrat, Unitate si Livrare. Reincarcarea situatiei este
+disponibila la o eroare de citire. Datele financiare raman ascunse depozitului.
+
+Validare: 23 de teste backend tintite pe PostgreSQL si 18 teste de browser
+trecute, plus build frontend reusit. Testele backend verifica livrari succesive,
+toate rolurile de business, mai multe pozitii, paginarea, ciornele si marfa
+respinsa sau in asteptare. Testele de browser folosesc raspunsuri simulate;
+datele reale ale utilizatorului nu au fost modificate.
+
+## Interfata: factura noua
+
+Contul CONTABILITATE are butonul Factura noua pe pagina principala si in Facturi.
+InvoiceForm solicita furnizor activ, serie optionala, numar, data facturii,
+scadenta, moneda RON/EUR si 1-100 de pozitii cu produs activ, cantitate, pret unitar
+si TVA. Catalogul este incarcat cu toate paginile; celelalte roluri nu primesc
+actiunea. Seria si numarul sunt trimise in majuscule, fara eliminarea zerourilor
+initiale. Scadenta nu poate preceda data facturii.
+
+Salveaza ciorna trimite POST /api/invoices cu CSRF si structura existenta a API:
+supplier_id, series, number, invoice_date, due_date, currency si items. Cantitatile,
+preturile si TVA sunt texte zecimale cu punct; formularul accepta si virgula.
+Backendul calculeaza netul, TVA si totalul cu Decimal, controleaza unicitatea
+furnizor/serie/numar si salveaza factura DRAFT impreuna cu auditul. Raspunsul este
+citit din campul invoice, apoi lista afiseaza documentul si totalul calculat.
+
+Salvarea nu aloca receptii, nu verifica factura si nu modifica stocul sau platile.
+Cursul EUR va fi preluat de fluxul de verificare existent, nu la crearea ciornei.
+Asocierea facturii cu receptiile, verificarea si aprobarea urmeaza separat in UI.
+Totalul declarat pe documentul furnizorului si atasarea fisierului nu sunt inca
+incluse in acest formular.
+
+Factura duplicata si erorile de validare pastreaza formularul. Pe durata salvarii,
+campurile si butonul sunt blocate. Un rezultat incert de retea sau server opreste
+repetarea cererii si ofera Vezi facturile. Expirarea sesiunii readuce autentificarea.
+
+Validare: build reusit si 19 teste tintite de browser trecute in aproximativ
+13 secunde, dintre care 14 noi pentru facturi. Sunt acoperite RON/EUR, CSRF,
+zecimale, referinta cu zerouri, serie optionala, scadenta, pozitii dinamice,
+duplicatul, catalogul paginat/inactiv/gol, mobilul, rezultatul incert si accesul.
+Testele folosesc API simulat, inclusiv totalurile raspunsului; calculul financiar
+ramane in backendul existent. Backendul nu a fost modificat si suita lui nu a fost
+rerulata. Nu au fost create facturi reale automat.
+
+## Factura pornita din comanda
+
+Factura noua porneste implicit in modul Din comanda. Contabilitatea selecteaza
+o comanda confirmata sau inchisa; aplicatia precompleteaza furnizorul, moneda,
+produsele, cantitatile comandate, preturile si TVA. Furnizorul ramane cel al
+comenzii. Cantitatea, pretul, TVA si moneda facturate pot fi corectate pentru a
+reproduce documentul primit, inclusiv diferentele care vor necesita clarificare.
+
+Fiecare pozitie afiseaza cantitatea comandata, acceptata, asociata activ facturilor
+si disponibila pentru asociere. GET /api/purchase-orders/{id}/invoicing este
+exclusiv pentru CONTABILITATE si returneaza aceste date in campul order. Cantitatea
+asociata include alocari active, chiar daca factura nu este platita; o ciorna fara
+alocari nu rezerva marfa. Cantitatile respinse sau in asteptare nu sunt disponibile.
+Valorile afisate sunt informative si vor fi reverificate la alocare.
+
+Migrarea 0020_invoice_order_source adauga purchase_order_item_id optional pe
+invoice_items, cu FK si index. Facturile existente raman fara sursa explicita.
+POST /api/invoices accepta acest camp pe pozitii; backendul verifica existenta
+comenzii confirmate, furnizorul, produsul si unitatea, apoi pastreaza legatura in
+factura si audit. Pretul sau moneda diferite nu impiedica inregistrarea ciornei.
+La editare, omiterea sursei unei pozitii existente o pastreaza. Alocarea si
+verificarea nu pot justifica o pozitie cu sursa explicita printr-o alta pozitie
+de comanda, chiar daca produsul este acelasi.
+
+Modul Introducere manuala ramane disponibil pentru documentele fara comanda
+identificata. Schimbarea modului sterge sursele precompletate; schimbarea comenzii
+incarca alte pozitii si blocheaza salvarea pana la terminarea incarcarii. Daca
+produsul unei pozitii este schimbat, legatura ei cu pozitia initiala este eliminata.
+In acest pas este selectata o singura comanda; modelul permite surse distincte pe
+pozitii, iar asocierea cantitativa cu receptiile ramane o operatie separata.
+
+Validare: 126 de teste backend tintite pe PostgreSQL si 16 teste de browser
+trecute, plus build reusit. Sunt verificate sursa persistata si auditata, pastrarea
+ei la editare, rolurile, surse invalide, comenzi in ciorna, alocari din alta comanda,
+cantitati disponibile dupa alocare/eliberare, precompletarea si modul manual.
+Testele de browser folosesc API simulat. Migrarea a fost aplicata local, db check
+nu raporteaza diferente, iar backendul a fost repornit. Nu au fost create sau
+confirmate facturi reale automat.
+
+## Fluxul contabil complet in interfata
+
+Detaliile facturii includ acum propunerea si salvarea asocierilor la receptii,
+eliberarea unei asocieri, blocajele, corectarea facturii, verificarea, aprobarea
+si inregistrarea unei plati integrale. Facturile aprobate si platite sunt doar
+de citit in fluxul obisnuit. Propunerea respecta disponibilul comun al aceleiasi
+pozitii de receptie, inclusiv cand produsul apare pe mai multe pozitii de factura.
+Backendul reverifica toate limitele la salvare.
+
+GET /api/invoices/{id}/matching, exclusiv CONTABILITATE, returneaza factura,
+pozitiile, recepțiile candidate, disponibilul, diferentele comerciale, asocierile
+active si blocajele deschise. Rezultatul este informativ; citirea nu rezerva
+cantitati si nu modifica auditul. Pretul, moneda, TVA sau unitatea diferite sunt
+afisate explicit si impiedica propunerea unei asocieri incompatibile.
+
+Observatiile sunt obligatorii pentru asociere, eliberare, aprobare si plata.
+Verificarea poate fi ceruta separat si afiseaza motivele de blocare, responsabilul,
+cursul folosit si totalul in RON. Aprobarea repeta controalele. Plata cere referinta
+si momentul efectiv, cu precizia necesara regulii de a nu preceda aprobarea.
+Nu sunt initiate transferuri bancare. Corectarea facturii reutilizeaza InvoiceForm
+prin PATCH, cu motiv si versiune, cand nu exista asocieri active.
+
+Rezumatul cerintelor, limitele si ordinea ramasa sunt in
+[docs/stare-proiect.md](docs/stare-proiect.md).
+
+Validare la acest checkpoint: 144 teste backend tintite pe PostgreSQL, 94 teste
+de interfata cu API simulat si patru fluxuri complete prin browser cu Flask si
+PostgreSQL reale. Scenariile reale acopera 77+23 pana la plata, marfa lipsa,
+pret gresit cu corectare si facturarea dubla cu eliberarea asocierii. Corectarea
+este verificata si pe mobil. Buildul frontend reuseste.
+
+Testele reale ruleaza separat, intr-o schema temporara anulata la final.
+Intr-un terminal din backend:
+
+```powershell
+$env:PYTHONPATH = (Get-Location).Path
+.\.venv\Scripts\python.exe tests/browser_server.py
+```
+
+Cu frontendul disponibil pe 127.0.0.1:5173, intr-un alt terminal din frontend:
+
+```powershell
+$env:RURIS_REAL_API = '1'
+npm test -- real-flows.spec.js
+Remove-Item Env:RURIS_REAL_API
+```
+
+Pe acest PC, frontend/start.ps1 poate pregati Node portabil pentru serverul de
+dezvoltare; terminalul pentru npm are nevoie de Node in PATH. Playwright opreste
+serverul de test prin globalTeardown, dupa toate testele selectate, apoi tranzactia
+este anulata. Rularea obisnuita npm test omite scenariile care necesita
+acest server. Conturile si datele tale obisnuite nu sunt folosite de aceste teste.
+
+## Clarificarea salvarii asocierilor
+
+Cand exista cantitate neacoperita si receptii compatibile disponibile, actiunea
+principala este Asociaza si verifica. Foloseste cantitatile introduse sau propune
+cantitatile disponibile, salveaza asocierile cu motiv, apoi verifica folosind noua
+versiune returnata de server. Optiunile manuale raman disponibile. Un deficit real
+ramane blocat; acoperirea integrala nu aproba automat factura.
+
+Verificare: build reusit si doua scenarii de browser cu Flask/PostgreSQL reale:
+factura blocata pentru 5 M2 devine verificata prin noua actiune, iar 100 facturate
+cu 77 acceptate raman blocate. Datele utilizatorului nu sunt modificate automat.
+
+## Detalii utile in lista comenzilor
+
+Comenzi afiseaza numele furnizorului, produsul comandat cu SKU, cantitatea,
+unitatea de masura si pretul unitar fara TVA, cu moneda. Mai multe pozitii sunt
+grupate sub aceeasi comanda; fiecare produs are cantitatea, unitatea si pretul
+proprii. Starea documentului si situatia livrarii raman separate. Depozitul vede
+produsele si unitatile, fara preturi sau moneda in datele primite de la backend.
+
+GET /api/purchase-orders adauga supplier_name si items pentru comenzile paginii.
+Pozitiile se incarca impreuna, fara cereri separate pentru fiecare comanda.
+Descrierea, unitatea si pretul provin din document, iar SKU din catalogul cu cod
+imuabil. Cautarea pe pagina curenta include numele furnizorului, descrierile si
+codurile produselor. Pe mobil tabelul permite derularea orizontala.
+
+Verificare: 14 teste backend tintite pe PostgreSQL, 13 teste de browser cu API
+simulat si build reusit. Sunt acoperite toate rolurile de business, mai multe
+pozitii, paginarea, descrierile pastrate in document, cautarea si mobilul.
+
+## Marfă fără comandă și rezolvarea cantităților în așteptare
+
+Depozitul poate alege **Recepție nouă → Fără comandă**. Furnizorul trebuie să
+existe în catalog; produsul poate fi încă neidentificat, cu descriere și unitate.
+Salvarea creează o ciornă. La confirmare, cantitățile fără comandă rămân în
+așteptare sau sunt respinse; nu sunt acceptate direct în stoc.
+
+Pagina **Clarificări** afișează recepțiile confirmate cu rest în așteptare:
+
+- Achizițiile asociază o poziție dintr-o comandă confirmată și deschisă, cu același
+  furnizor, unitate și produs compatibil. Pentru un produs neidentificat, sursa
+  selectată stabilește produsul acceptării ulterioare.
+- Depozitul acceptă sau respinge o parte din rest, cu observații obligatorii.
+  Dacă recepția are deja o comandă inițială compatibilă cu rest disponibil,
+  acceptarea poate folosi direct acea sursă.
+- Contabilitatea consultă cantitățile și istoricul. Numai acceptările devin
+  disponibile pentru asociere; factura trebuie verificată din nou explicit.
+
+Detaliile recepției arată totalurile fizice, acceptările ulterioare cu produsul
+identificat și comanda lor, plus istoricul paginat cu autor, moment și motiv.
+Contorul din pagina principală reprezintă numărul recepțiilor de clarificat.
+
+| Operație API | Rol | Câmpuri JSON |
+| --- | --- | --- |
+| `POST /api/receipts/unordered` | Depozit | `supplier_id`, `delivery_reference`, `received_at`, `items` |
+| `POST /api/receipts/<id>/items/<item_id>/clarify` | Achiziții | `version`, `reason`, `purchase_order_item_id` |
+| `POST /api/receipts/<id>/items/<item_id>/resolve` | Depozit | `version`, `reason`, `action`, `quantity` |
+| `GET /api/receipts/pending` | Cele trei echipe | Paginare `page`, `per_page` |
+| `GET /api/receipts/<id>/history` | Cele trei echipe | Aceleași reguli de vizibilitate ca recepția; paginare `page`, `per_page` |
+
+Pozițiile unei sosiri fără comandă cer `product_id` (număr sau `null`),
+`description`, `unit` și `received_quantity`. Cantitățile se trimit ca texte
+zecimale cu cel mult 3 zecimale. Decizia este `ACCEPT` sau `REJECT`, în limita
+restului; acceptarea verifică din nou cantitatea disponibilă a comenzii.
+
+Migrarea `0021_receipt_exceptions` adaugă `origin_item_id`, `pending_order_item_id`
+și `resolved_quantity`, fără schimbarea documentelor existente. Acceptările
+ulterioare sunt poziții distincte în aceeași recepție, legate de poziția fizică
+prin `origin_item_id`. Fiecare păstrează sursa comercială proprie. Nu reprezintă
+o nouă sosire și nu se însumează din nou în cantitatea fizică sosită.
+
+Pentru poziția fizică, `resolved_quantity` însumează numai acceptările ulterioare.
+Soldul ei respectă sosit = acceptat inițial + acceptat ulterior + respins + în
+așteptare. `GET` pentru o recepție confirmată întoarce pozițiile fizice în `items`,
+cu `total_accepted_quantity` și lista `acceptances`. Livrarea și facturarea folosesc
+acceptările pe surse, fără a adăuga din nou contorul `resolved_quantity`.
+
+Decizia, mișcarea de stoc și auditul sunt atomice. Versiunea recepției și blocarea
+comenzii protejează împotriva deciziilor repetate și a depășirii restului din două
+sesiuni. Un rezultat incert cere citirea datelor înaintea unei noi încercări.
+
+Au fost verificate în browser, cu API real, sosirea neidentificată de 10 bucăți
+rezolvată prin acceptare 6 și respingere 4, precum și surplusul de 4 pe o comandă
+suplimentară, inclusiv facturarea separată a celor două surse. Testele backend
+acoperă și concurența, permisiunile și anularea întregii operații la eșecul auditului.
+Datele automate sunt izolate de datele locale ale utilizatorului.
+
+Pașii manuali și lucrările rămase sunt în [starea proiectului](docs/stare-proiect.md).
+Emailurile pentru aceste clarificări vor fi integrate în pachetul de notificări.

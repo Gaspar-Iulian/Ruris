@@ -43,6 +43,14 @@ def session():
                         "0011_email_retry_schedule.py",
                         "0012_invoice_drafts_add_invoice_drafts.py",
                         "0013_invoice_line_order.py",
+                        "0014_invoice_allocations_add_invoice_allocations.py",
+                        "0015_invoice_verification_add_invoice_verification_issues.py",
+                        "0016_exchange_rates_add_historical_exchange_rates.py",
+                        "0017_invoice_approval_add_invoice_approval.py",
+                        "0018_invoice_payment_add_invoice_payment_recording.py",
+                        "0019_blocked_invoice_emails.py",
+                        "0020_invoice_order_source.py",
+                        "0021_receipt_exceptions.py",
                     ):
                         spec = importlib.util.spec_from_file_location(filename[:-3], migrations / filename)
                         migration = importlib.util.module_from_spec(spec)

@@ -9,11 +9,20 @@ legate la o singura comanda confirmata. Confirmarea receptiilor si intrarile in
 Iesirile, retururile, soldul initial, ajustarile si campul reverses_id sunt planificate.
 Pentru comenzi sunt implementate crearea/listarea/detaliul/editarea ciornelor si confirmarea.
 Campurile `closed_quantity` si `close_reason` si operatiile de anulare/inchidere sunt planificate.
-Sunt implementate `email_outbox` si `email_attempts` pentru sumarele locale,
+Sunt implementate `email_outbox` si `email_attempts` pentru sumarele locale de
+intarzieri si facturi blocate,
 cu unicitate tip/transport/zi/responsabil si jurnalul incercarilor.
 Sunt implementate `invoices` si `invoice_items` pentru crearea si consultarea
-ciornelor, inclusiv editare cu versiune si motiv obligatorii. Cursurile, alocarile,
-motivele de blocare, aprobarea si plata sunt planificate.
+ciornelor, inclusiv editare cu versiune si motiv obligatorii. Sunt implementate
+crearea si consultarea `invoice_allocations` ACTIVE pentru marfa acceptata,
+cu verificari cumulative si blocari ale pozitiilor receptiei.
+Eliberarea alocarilor este implementata pentru facturi DRAFT, cu motiv, versiune,
+momentul eliberarii si audit. Sunt implementate verificarea facturilor si
+`invoice_issues`, cu motive deschise, rezolvate sau depasite de o corectare.
+Sunt implementate cursurile istorice EUR/RON din BNR si conversia pastrata pe factura
+la verificare. Aprobarea explicita, cu reverificare, autor si moment, este implementata.
+Inregistrarea unei plati integrale este implementata pentru facturi APPROVED,
+cu paid_at, paid_by_id, payment_reference si audit. Corectarea platii ramane planificata.
 Restul tabelelor sunt planificate.
 Implementam fiecare grup impreuna cu regulile si testele lui.
 
@@ -136,16 +145,16 @@ Alocarile, verificarea facturii si auditul se salveaza in aceeasi tranzactie.
 Retururile si corectiile folosesc aceleasi blocari ca alocarile.
 
 Pentru prima versiune, o factura se achita integral printr-o singura inregistrare.
-`paid_at` si `payment_reference` tin evidenta acesteia; nu reprezinta confirmare de la banca.
+`paid_at`, `paid_by_id` si `payment_reference` tin evidenta acesteia; nu reprezinta confirmare de la banca.
 Nu introducem inca un tabel pentru transe de plata.
 
 ## Date auxiliare
 
 | Tabel | Campuri principale | Reguli |
 | --- | --- | --- |
-| exchange_rates | id, currency, rate_date, rate, source, fetched_at | Curs pozitiv; unicitate sursa + moneda + data |
+| exchange_rates | id, currency, rate_date, rate, source, source_url, content_sha256, fetched_at | Implementat pentru BNR/EUR; unicitate sursa + moneda + data; UPDATE/DELETE interzise prin trigger |
 | audit_events | id, actor_user_id, actor_process, action, entity_type, entity_id, before_data, after_data, reason, created_at | Autor uman sau proces; fara parole si tokenuri |
-| email_outbox | id, kind, transport, as_of, recipient_user_id, recipient_email, subject, body, content_hash, status, attempt_count, last_error, sent_at, next_attempt_at, created_at, updated_at | Implementat pentru OVERDUE/LOCAL_MAILPIT; unicitate utilizator + tip + transport + zi; reincercare programata in UTC |
+| email_outbox | id, kind, transport, as_of, recipient_user_id, recipient_email, subject, body, content_hash, status, attempt_count, last_error, sent_at, next_attempt_at, created_at, updated_at | Implementat pentru OVERDUE si BLOCKED_INVOICES / LOCAL_MAILPIT; unicitate utilizator + tip + transport + zi; reincercare programata in UTC |
 | email_attempts | id, outbox_id, attempt_number, status, error_code, started_at, completed_at | Implementat; maxim 3 incercari, numar unic per mesaj |
 | attachments | id, purchase_order_id, receipt_id, invoice_id, storage_key, original_name, media_type, size_bytes, uploaded_by_id, created_at | Exact un document parinte; acces verificat prin document |
 | idempotency_requests | id, user_id, operation, request_key, request_hash, result_reference, created_at | Unicitate utilizator + operatie + cheie; continutul repetat trebuie sa corespunda |

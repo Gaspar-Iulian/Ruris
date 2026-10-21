@@ -29,12 +29,13 @@ ENTITY_FIELDS["receipts"] = {
     "confirmed_at": (str, type(None)), "version": int,
 }
 ENTITY_FIELDS["receipt_items"] = {
-    "receipt_id": int, "line_number": int, "product_id": int, "purchase_order_item_id": (int, type(None)),
+    "receipt_id": int, "line_number": int, "product_id": (int, type(None)), "purchase_order_item_id": (int, type(None)),
+    "pending_order_item_id": (int, type(None)), "origin_item_id": (int, type(None)), "resolved_quantity": str,
     "description": str, "unit": str, "received_quantity": str, "accepted_quantity": str,
     "rejected_quantity": str, "pending_quantity": str,
 }
 ENTITY_ACTIONS["receipts"] = {"CREATE", "UPDATE", "CONFIRM"}
-ENTITY_ACTIONS["receipt_items"] = {"CREATE", "UPDATE"}
+ENTITY_ACTIONS["receipt_items"] = {"CREATE", "UPDATE", "CLARIFY", "ACCEPT", "REJECT"}
 ENTITY_FIELDS["stock_movements"] = {
     "product_id": int, "receipt_item_id": int, "kind": str, "quantity_delta": str,
     "reason": str, "created_by_id": int, "operation_key": str,
@@ -52,12 +53,32 @@ ENTITY_FIELDS["invoices"] = {
     "status": str, "created_by_id": int, "version": int,
 }
 ENTITY_FIELDS["invoice_items"] = {
+    "purchase_order_item_id": (int, type(None)),
     "invoice_id": int, "line_number": int, "product_id": int, "description": str, "unit": str,
     "quantity": str, "unit_price": str, "vat_rate": str,
     "net_amount": str, "vat_amount": str, "total_amount": str,
 }
-ENTITY_ACTIONS["invoices"] = {"CREATE", "UPDATE"}
+ENTITY_ACTIONS["invoices"] = {"CREATE", "UPDATE", "VERIFY", "APPROVE", "PAY"}
 ENTITY_ACTIONS["invoice_items"] = {"CREATE", "UPDATE", "DELETE"}
+ENTITY_FIELDS["invoice_allocations"] = {
+    "invoice_item_id": int, "receipt_item_id": int, "quantity": str, "status": str,
+    "released_at": (str, type(None)),
+}
+ENTITY_ACTIONS["invoice_allocations"] = {"CREATE", "RELEASE"}
+ENTITY_FIELDS["invoice_issues"] = {
+    "invoice_id": int, "invoice_item_id": (int, type(None)), "code": str, "details": str,
+    "responsible_role": str, "opened_at": str, "resolved_at": (str, type(None)), "resolution": (str, type(None)),
+}
+ENTITY_ACTIONS["invoice_issues"] = {"OPEN", "UPDATE", "RESOLVE", "SUPERSEDE"}
+ENTITY_FIELDS["invoices"].update({
+    "approved_by_id": (int, type(None)), "approved_at": (str, type(None)),
+    "paid_by_id": (int, type(None)), "paid_at": (str, type(None)), "payment_reference": (str, type(None)),
+    "exchange_rate_id": (int, type(None)), "exchange_rate_source": (str, type(None)),
+    "exchange_rate_date": (str, type(None)), "exchange_rate_value": (str, type(None)), "total_ron": (str, type(None)),
+})
+ENTITY_FIELDS["exchange_rates"] = {"currency": str, "rate_date": str, "rate": str,
+                                    "source": str, "source_url": str, "content_sha256": str}
+ENTITY_ACTIONS["exchange_rates"] = {"FETCH"}
 
 
 def user_snapshot(user):

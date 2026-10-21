@@ -105,6 +105,8 @@ Se pastreaza suma originala, cursul, sursa, data cursului si suma in RON.
 RON foloseste curs 1. EUR foloseste cursul BNR pentru data facturii.
 Propunere pentru o zi fara publicare: ultimul curs publicat anterior, cu data afisata explicit.
 Aceasta politica trebuie confirmata cu contabilitatea inainte de utilizarea reala.
+Implementarea actuala foloseste strict data facturii; nu aplica inca aceasta propunere
+pentru weekenduri sau sarbatori. O zi fara curs publicat produce blocaj explicit.
 Daca un curs necesar nu a fost publicat sau nu poate fi preluat, factura asteapta cursul.
 La indisponibilitatea sursei se foloseste doar un curs local corespunzator regulii stabilite.
 Nu se substituie cursul din ziua curenta pentru o factura istorica.

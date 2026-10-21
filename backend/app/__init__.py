@@ -4,6 +4,7 @@ from app.cli import create_admin_command, preview_overdue_emails_command
 from app.cli import send_overdue_emails_local_command, send_test_email_command
 from app.cli import list_email_deliveries_command
 from app.cli import run_notification_worker_command
+from app.cli import preview_blocked_invoice_emails_command, send_blocked_invoice_emails_local_command
 from app.config import get_config
 from app.extensions import db, jwt, limiter, migrate
 from app.jwt_callbacks import register_jwt_callbacks
@@ -42,4 +43,6 @@ def create_app():
     app.cli.add_command(send_overdue_emails_local_command)
     app.cli.add_command(list_email_deliveries_command)
     app.cli.add_command(run_notification_worker_command)
+    app.cli.add_command(preview_blocked_invoice_emails_command)
+    app.cli.add_command(send_blocked_invoice_emails_local_command)
     return app

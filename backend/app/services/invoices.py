@@ -5,7 +5,8 @@ import re
 from sqlalchemy import func, select
 
 from app.extensions import db
-from app.models import Invoice, InvoiceItem, Role, User
+from app.models import Invoice, InvoiceAllocation, InvoiceIssue, InvoiceItem, PurchaseOrder, PurchaseOrderItem, Role, User
+from app.services.invoice_issues import invalidate_verification
 from app.services.audit import record_audit
 from app.services.purchase_orders import decimal_value, lock_catalog, positive_id
 
@@ -35,13 +36,23 @@ def update_invoice(*, actor_user_id, invoice_id, version, reason, **data):
         invoice = db.session.scalar(select(Invoice).where(Invoice.id == invoice_id).with_for_update().execution_options(populate_existing=True))
         if invoice is None:
             raise InvoiceNotFoundError("Factura nu a fost gasita.")
-        if invoice.status != "DRAFT" or invoice.version != version:
+        if invoice.status not in ("DRAFT", "BLOCKED", "VERIFIED") or invoice.version != version:
             raise InvoiceConflictError("Factura nu mai este o ciorna sau a fost modificata. Reincarca documentul.")
+        if db.session.scalar(select(InvoiceAllocation.id).join(InvoiceItem, InvoiceItem.id == InvoiceAllocation.invoice_item_id)
+                             .where(InvoiceItem.invoice_id == invoice.id, InvoiceAllocation.status == "ACTIVE").limit(1)) is not None:
+            raise InvoiceConflictError("Factura are alocari active. Elibereaza-le inainte de corectare.")
         products = lock_catalog(fields["supplier_id"], parsed)
         existing = {item.id: item for item in invoice.items}
+        validate_order_sources(parsed, fields["supplier_id"], products, existing)
         ids = [item["id"] for item in parsed if "id" in item]
         if len(ids) != len(set(ids)) or set(ids) - existing.keys():
             raise ValueError("Pozitiile existente trebuie sa apartina facturii si sa nu se repete.")
+        removed_ids = existing.keys() - set(ids)
+        if removed_ids and db.session.scalar(select(InvoiceAllocation.id).where(
+                InvoiceAllocation.invoice_item_id.in_(removed_ids)).limit(1)) is not None:
+            raise InvoiceConflictError("O pozitie cu istoric de alocari trebuie pastrata. Poti corecta valorile ei dupa eliberare.")
+        if removed_ids and db.session.scalar(select(InvoiceIssue.id).where(InvoiceIssue.invoice_item_id.in_(removed_ids)).limit(1)) is not None:
+            raise InvoiceConflictError("O pozitie cu istoric de verificare trebuie pastrata; corecteaza valorile ei.")
         for item in parsed:
             if "id" in item and existing[item["id"]].product_id != item["product_id"]:
                 raise ValueError("Produsul unei pozitii existente nu poate fi schimbat; adauga o pozitie noua.")
@@ -55,6 +66,7 @@ def update_invoice(*, actor_user_id, invoice_id, version, reason, **data):
         if unchanged:
             db.session.commit()
             return before
+        invalidate_verification(invoice, actor_user_id=actor.id, reason=reason.strip())
         for item in invoice.items:
             item.line_number += 100
         db.session.flush()
@@ -82,6 +94,9 @@ def update_invoice(*, actor_user_id, invoice_id, version, reason, **data):
         invoice.items.sort(key=lambda item: item.line_number)
         after = invoice_data(invoice)
         if before != after:
+            after["status"] = invoice.status
+            for key in ("exchange_rate_id", "exchange_rate_value", "exchange_rate_date", "exchange_rate_source", "total_ron"):
+                after[key] = None
             invoice.version += 1
             after["version"] = invoice.version
             record_audit(action="UPDATE", entity_type="invoices", entity_id=invoice.id, actor_user_id=actor.id,
@@ -128,6 +143,7 @@ def money(value):
 
 def item_data(item):
     result = {key: getattr(item, key) for key in ("id", "line_number", "product_id", "description", "unit")}
+    result["purchase_order_item_id"] = item.purchase_order_item_id
     for key, scale in (("quantity", 3), ("unit_price", 4), ("vat_rate", 2), ("net_amount", 2), ("vat_amount", 2), ("total_amount", 2)):
         result[key] = format(getattr(item, key), f".{scale}f")
     return result
@@ -139,6 +155,16 @@ def invoice_data(invoice, *, include_items=True):
         result[key] = getattr(invoice, key).isoformat()
     for key in ("net_amount", "vat_amount", "total_amount"):
         result[key] = format(getattr(invoice, key), ".2f")
+    result["exchange_rate_id"] = invoice.exchange_rate_id
+    result["approved_by_id"] = invoice.approved_by_id
+    result["approved_at"] = invoice.approved_at.isoformat() if invoice.approved_at else None
+    result["paid_by_id"] = invoice.paid_by_id
+    result["paid_at"] = invoice.paid_at.isoformat() if invoice.paid_at else None
+    result["payment_reference"] = invoice.payment_reference
+    result["exchange_rate_source"] = invoice.exchange_rate_source
+    result["exchange_rate_date"] = invoice.exchange_rate_date.isoformat() if invoice.exchange_rate_date else None
+    result["exchange_rate_value"] = format(invoice.exchange_rate_value, ".6f") if invoice.exchange_rate_value is not None else None
+    result["total_ron"] = format(invoice.total_ron, ".2f") if invoice.total_ron is not None else None
     if include_items:
         result["items"] = [item_data(item) for item in invoice.items]
     return result
@@ -158,7 +184,7 @@ def parse_invoice(supplier_id, series, number, invoice_date, due_date, currency,
     with localcontext() as context:
         context.prec = 50
         for item in items:
-            if not isinstance(item, dict) or set(item) - ({"id"} if editing else set()) != {"product_id", "quantity", "unit_price", "vat_rate"}:
+            if not isinstance(item, dict) or set(item) - ({"id", "purchase_order_item_id"} if editing else {"purchase_order_item_id"}) != {"product_id", "quantity", "unit_price", "vat_rate"}:
                 raise ValueError("Pozitia necesita product_id, quantity, unit_price si vat_rate.")
             values = {"product_id": positive_id(item["product_id"]),
                       "quantity": decimal_value(item["quantity"], scale=3, integer_digits=15, positive=True),
@@ -169,11 +195,36 @@ def parse_invoice(supplier_id, series, number, invoice_date, due_date, currency,
             values["total_amount"] = money(values["net_amount"] + values["vat_amount"])
             if "id" in item:
                 values["id"] = positive_id(item["id"])
+            if "purchase_order_item_id" in item:
+                values["purchase_order_item_id"] = positive_id(item["purchase_order_item_id"]) if item["purchase_order_item_id"] is not None else None
             parsed.append(values)
         totals = {key: money(sum((item[key] for item in parsed), Decimal("0")))
                   for key in ("net_amount", "vat_amount", "total_amount")}
     return {"supplier_id": supplier_id, "series": series, "number": number, "invoice_date": invoice_date,
             "due_date": due_date, "currency": currency, **totals}, parsed
+
+
+def validate_order_sources(items, supplier_id, products, existing=None):
+    existing = existing or {}
+    for item in items:
+        if "purchase_order_item_id" not in item and item.get("id") in existing:
+            item["purchase_order_item_id"] = existing[item["id"]].purchase_order_item_id
+    ids = {item["purchase_order_item_id"] for item in items if item.get("purchase_order_item_id") is not None}
+    rows = db.session.execute(select(PurchaseOrderItem, PurchaseOrder).join(PurchaseOrder,
+        PurchaseOrder.id == PurchaseOrderItem.purchase_order_id).where(PurchaseOrderItem.id.in_(ids))).all() if ids else []
+    sources = {line.id: (line, order) for line, order in rows}
+    for item in items:
+        source_id = item.get("purchase_order_item_id")
+        if source_id is None:
+            continue
+        source = sources.get(source_id)
+        if source is None:
+            raise ValueError("Pozitia de comanda nu exista.")
+        line, order = source
+        if (order.status not in ("CONFIRMED", "CLOSED") or order.confirmed_at is None
+                or order.supplier_id != supplier_id or line.product_id != item["product_id"]
+                or line.unit != products[item["product_id"]].unit):
+            raise ValueError("Pozitia facturii necesita o comanda confirmata, cu acelasi furnizor, produs si unitate.")
 
 
 def create_invoice(*, actor_user_id, supplier_id, series, number, invoice_date, due_date, currency, items):
@@ -183,6 +234,7 @@ def create_invoice(*, actor_user_id, supplier_id, series, number, invoice_date, 
         if actor is None or not actor.is_active or actor.role != Role.CONTABILITATE:
             raise InvoiceForbiddenError("Doar contabilitatea poate inregistra facturi.")
         products = lock_catalog(supplier_id, parsed)
+        validate_order_sources(parsed, supplier_id, products)
         invoice = Invoice(created_by_id=actor.id, **fields)
         for line, values in enumerate(parsed, 1):
             product = products[values["product_id"]]

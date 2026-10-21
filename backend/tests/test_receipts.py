@@ -751,9 +751,13 @@ def test_confirmed_receipt_visibility_filters_list_detail_and_total(session, set
     assert response.headers["Cache-Control"] == "no-store"
     assert response.json["total"] == (3 if role == Role.DEPOZIT else 1)
     if role != Role.DEPOZIT:
-        assert response.json["receipts"] == [{key: value for key, value in confirmed.items() if key != "items"}]
+        assert response.json["receipts"] == [{**{key: value for key, value in confirmed.items() if key != "items"},
+                                               "supplier_name": "Furnizor", "pending_count": 1}]
         assert client.get("/api/receipts?page=2&per_page=1").json["receipts"] == []
-    assert client.get(f"/api/receipts/{confirmed['id']}").json["receipt"] == confirmed
+    expected = {**confirmed, "supplier_name": "Furnizor", "items": [{**confirmed["items"][0],
+        "total_accepted_quantity": "2.000", "pending_order_number": setup["order"]["number"],
+        "pending_product_name": "Produs comandat", "acceptances": []}]}
+    assert client.get(f"/api/receipts/{confirmed['id']}").json["receipt"] == expected
     for receipt in (hidden, cancelled):
         assert client.get(f"/api/receipts/{receipt['id']}").status_code == (200 if role == Role.DEPOZIT else 404)
     if role != Role.DEPOZIT:
@@ -858,7 +862,7 @@ def test_delivery_remainder_respects_roles_and_hides_drafts(session, setup, role
     response = client.get(f"/api/purchase-orders/{setup['order']['id']}/delivery")
     assert response.status_code == (403 if role == Role.ADMIN else 200)
     if role != Role.ADMIN:
-        assert set(response.json["delivery"]) == {"id", "number", "status", "items"}
+        assert set(response.json["delivery"]) == {"id", "number", "status", "delivery_status", "items"}
         assert set(response.json["delivery"]["items"][0]) == {
             "id", "line_number", "product_id", "description", "unit", "quantity", "expected_date",
             "accepted_quantity", "remaining_quantity", "delivery_status",

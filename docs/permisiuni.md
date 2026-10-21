@@ -69,11 +69,51 @@ Raspunsurile au Cache-Control: no-store.
 
 ## Facturi in ciorna
 
+GET /api/invoices/{id}/matching este exclusiv CONTABILITATE. Returneaza
+recepțiile candidate, diferentele comerciale, disponibilul, asocierile active si
+blocajele, pentru procesarea facturii. Operatiile de scriere folosesc in continuare
+rutele existente cu JWT, CSRF, versiune si motiv unde este obligatoriu.
+
+GET /api/purchase-orders/{id}/invoicing este exclusiv CONTABILITATE. Expune
+datele comerciale ale comenzii si cantitatile acceptate, asociate activ facturilor
+si disponibile, pentru precompletare. Celelalte roluri primesc 403.
+
 POST /api/invoices, GET /api/invoices si GET /api/invoices/{id} sunt disponibile
 exclusiv rolului CONTABILITATE. Inclusiv ADMIN primeste 403.
 Crearea si PATCH /api/invoices/{id} necesita JWT valid si protectie CSRF.
-Editarea este permisa numai in DRAFT, cu version si reason obligatorii.
-Nu exista inca verificare, aprobare sau plata. Celelalte echipe nu pot consulta ciornele facturilor.
+Editarea este permisa in DRAFT, BLOCKED si VERIFIED, cu version si reason obligatorii,
+fara alocari active. O schimbare efectiva revine la DRAFT si invalideaza verificarea.
+Aprobarea si inregistrarea platii sunt descrise mai jos.
+Celelalte echipe nu pot consulta facturile.
+
+POST si GET /api/invoices/{id}/allocations sunt disponibile exclusiv CONTABILITATE.
+Crearea alocarilor necesita JWT, CSRF, version si reason. POST
+/api/invoices/{id}/allocations/release permite aceluiasi rol eliberarea integrala
+a alocarilor selectate, cu aceleasi protectii. Editarea ciornei este blocata cat
+timp exista alocari ACTIVE; liniile cu istoric de alocari nu pot fi eliminate.
+Alocarea nu aproba factura si nu inregistreaza plata.
+
+POST /api/invoices/{id}/verify si GET /api/invoices/{id}/issues sunt exclusiv pentru
+CONTABILITATE. Verificarea necesita JWT, CSRF si version; lista motivelor include
+istoricul paginat. Rolul responsabil salvat pe un blocaj nu acorda implicit acces
+altor echipe la factura. Crearea si eliberarea alocarilor sunt permise si din
+BLOCKED/VERIFIED; o astfel de schimbare invalideaza verificarea si revine la DRAFT.
+
+POST /api/invoices/{id}/approve este exclusiv pentru CONTABILITATE, cu JWT,
+CSRF, version si reason. Necesita VERIFIED si repeta verificarile sub blocare.
+APPROVED pastreaza autorul si momentul aprobarii, iar modificarile, alocarile,
+eliberarile si reverificarea obisnuita sunt respinse cu 409 pentru acest document.
+Aprobarea nu transmite o plata catre banca.
+
+POST /api/invoices/{id}/pay este exclusiv pentru CONTABILITATE, cu JWT, CSRF,
+version, reason, paid_at si payment_reference. Necesita APPROVED, versiunea curenta
+si absenta motivelor deschise. O factura PAID respinge modificarea si o a doua plata.
+Aceasta operatie tine evidenta unei plati integrale; nu trimite ordine bancare.
+
+Sumarul email al facturilor BLOCKED include doar motivele deschise si este adresat
+conturilor active CONTABILITATE. Rolul, starea si adresa destinatarului sunt
+recontrolate la preluarea mesajului pentru trimitere. Nu se trimit aceste sumaruri
+catre ADMIN, ACHIZITII sau DEPOZIT in aceasta etapa. Transportul ramane Mailpit local.
 
 ## Matricea pentru modulele viitoare
 
@@ -83,7 +123,7 @@ Aceste operatii nu sunt implementate inca. Matricea ghideaza construirea lor.
 | --- | --- | --- |
 | Iesire, retur, ajustare de stoc | DEPOZIT | Achizitiile si contabilitatea vad efectele relevante propriului flux |
 | Inregistrare si verificare factura | CONTABILITATE | Achizitiile vad diferentele pentru care trebuie sa discute cu furnizorul |
-| Aprobare factura si evidenta platii | CONTABILITATE | Acces limitat la starea necesara fluxului |
+| Corectarea platii sau revocarea aprobarii | CONTABILITATE | Acces limitat la starea necesara fluxului |
 
 Administratorul tehnic nu primeste automat dreptul de a confirma receptii sau de a aproba plati.
 Accesul de citire intre echipe va avea campuri limitate in raspunsul API.

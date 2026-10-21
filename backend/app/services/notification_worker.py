@@ -5,7 +5,7 @@ from flask import current_app
 from sqlalchemy import func, select
 
 from app.extensions import db
-from app.services.email_delivery import send_overdue_digests_local
+from app.services.email_delivery import send_notification_digests_local
 
 
 def worker_settings():
@@ -32,7 +32,7 @@ def run_notification_tick(*, last_completed_date=None):
         today = local_now.date()
         if local_now.time() < daily_time or last_completed_date == today:
             return {"ran": False, "last_completed_date": last_completed_date, "local_time": local_now.isoformat()}
-        result = send_overdue_digests_local(retry_delay_seconds=retry_seconds)
+        result = send_notification_digests_local(retry_delay_seconds=retry_seconds)
         return {"ran": True, "last_completed_date": today if result["retryable"] == 0 else last_completed_date,
                 "local_time": local_now.isoformat(), **result}
     finally:

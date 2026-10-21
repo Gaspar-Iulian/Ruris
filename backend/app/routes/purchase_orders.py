@@ -10,9 +10,23 @@ from app.services.purchase_orders import OrderConflictError, OrderManagementForb
 from app.services.purchase_orders import confirm_order
 from app.services.purchase_orders import get_order_delivery
 from app.services.purchase_orders import list_overdue_items
+from app.services.purchase_orders import get_order_invoicing
 
 
 purchase_orders_bp = Blueprint("purchase_orders", __name__)
+
+
+@purchase_orders_bp.get("/<int:order_id>/invoicing")
+@roles_required(Role.CONTABILITATE)
+def invoicing(order_id):
+    if not 1 <= order_id <= 9223372036854775807:
+        return jsonify(message="Comanda nu a fost gasita."), 404
+    try:
+        return jsonify(order=get_order_invoicing(order_id))
+    except OrderNotFoundError as error:
+        return jsonify(message=str(error)), 404
+    except SQLAlchemyError:
+        return jsonify(message="Situatia facturarii nu este disponibila momentan."), 503
 
 
 @purchase_orders_bp.post("/<int:order_id>/confirm")

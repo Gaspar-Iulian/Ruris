@@ -7,7 +7,7 @@ from sqlalchemy.orm import raiseload
 
 from app.extensions import db
 from app.models import PurchaseOrder, PurchaseOrderItem, Receipt, ReceiptItem, Role, User
-from app.models import Product, StockMovement
+from app.models import Product, StockMovement, Supplier
 from app.services.audit import record_audit
 from app.services.purchase_orders import decimal_value, positive_id
 
@@ -60,8 +60,9 @@ def receipt_data(receipt, *, include_items=True):
 def receipt_item_data(item):
     data = {key: getattr(item, key) for key in (
         "id", "line_number", "product_id", "purchase_order_item_id", "description", "unit",
+        "pending_order_item_id", "origin_item_id",
     )}
-    for key in ("received_quantity", "accepted_quantity", "rejected_quantity", "pending_quantity"):
+    for key in ("received_quantity", "accepted_quantity", "rejected_quantity", "pending_quantity", "resolved_quantity"):
         data[key] = format(getattr(item, key), ".3f")
     return data
 
@@ -291,12 +292,25 @@ def get_receipt(receipt_id, *, role=Role.DEPOZIT):
                                 .execution_options(populate_existing=True))
     if receipt is None:
         raise ReceiptNotFoundError("Receptia nu a fost gasita.")
-    return receipt_data(receipt)
+    if receipt.status != "CONFIRMED":
+        return receipt_data(receipt)
+    from app.services.receipt_exceptions import receipt_detail
+    return receipt_detail(receipt)
 
 
-def list_receipts(*, page, per_page, role=Role.DEPOZIT):
+def list_receipts(*, page, per_page, role=Role.DEPOZIT, pending_only=False):
     conditions = visible_receipts(role)
+    if pending_only:
+        conditions.extend([Receipt.status == "CONFIRMED", Receipt.confirmed_at.is_not(None), Receipt.confirmed_by_id.is_not(None),
+                           select(ReceiptItem.id).where(ReceiptItem.receipt_id == Receipt.id,
+                                                        ReceiptItem.origin_item_id.is_(None), ReceiptItem.pending_quantity > 0).exists()])
     receipts = db.session.scalars(select(Receipt).where(*conditions).options(raiseload(Receipt.items)).order_by(Receipt.id)
                                   .offset((page - 1) * per_page).limit(per_page)).all()
-    return {"receipts": [receipt_data(receipt, include_items=False) for receipt in receipts], "page": page, "per_page": per_page,
+    pending = dict(db.session.execute(select(ReceiptItem.receipt_id, func.count())
+        .where(ReceiptItem.receipt_id.in_([receipt.id for receipt in receipts]), ReceiptItem.origin_item_id.is_(None), ReceiptItem.pending_quantity > 0)
+        .group_by(ReceiptItem.receipt_id)).all())
+    suppliers = dict(db.session.execute(select(Supplier.id, Supplier.name)
+        .where(Supplier.id.in_({receipt.supplier_id for receipt in receipts}))).all())
+    return {"receipts": [{**receipt_data(receipt, include_items=False), "supplier_name": suppliers[receipt.supplier_id],
+                           "pending_count": pending.get(receipt.id, 0)} for receipt in receipts], "page": page, "per_page": per_page,
             "total": db.session.scalar(select(func.count()).select_from(Receipt).where(*conditions))}

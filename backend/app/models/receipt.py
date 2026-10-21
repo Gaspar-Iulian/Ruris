@@ -42,17 +42,25 @@ class ReceiptItem(db.Model):
         CheckConstraint("accepted_quantity >= 0 AND accepted_quantity <> 'NaN'::numeric", name="ck_receipt_items_accepted"),
         CheckConstraint("rejected_quantity >= 0 AND rejected_quantity <> 'NaN'::numeric", name="ck_receipt_items_rejected"),
         CheckConstraint("pending_quantity >= 0 AND pending_quantity <> 'NaN'::numeric", name="ck_receipt_items_pending"),
-        CheckConstraint("received_quantity = accepted_quantity + rejected_quantity + pending_quantity", name="ck_receipt_items_balance"),
+        CheckConstraint("resolved_quantity >= 0 AND resolved_quantity <> 'NaN'::numeric", name="ck_receipt_items_resolved"),
+        CheckConstraint("received_quantity = accepted_quantity + rejected_quantity + pending_quantity + resolved_quantity", name="ck_receipt_items_balance"),
+        CheckConstraint("origin_item_id IS NULL OR (origin_item_id <> id AND product_id IS NOT NULL "
+                        "AND purchase_order_item_id IS NOT NULL AND pending_order_item_id IS NULL "
+                        "AND accepted_quantity = received_quantity AND rejected_quantity = 0 "
+                        "AND pending_quantity = 0 AND resolved_quantity = 0)", name="ck_receipt_items_acceptance"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     receipt_id: Mapped[int] = mapped_column(ForeignKey("receipts.id", ondelete="RESTRICT"), index=True)
     line_number: Mapped[int] = mapped_column(Integer)
-    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="RESTRICT"), index=True)
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id", ondelete="RESTRICT"), index=True)
     purchase_order_item_id: Mapped[int | None] = mapped_column(ForeignKey("purchase_order_items.id", ondelete="RESTRICT"), index=True)
+    pending_order_item_id: Mapped[int | None] = mapped_column(ForeignKey("purchase_order_items.id", ondelete="RESTRICT"), index=True)
+    origin_item_id: Mapped[int | None] = mapped_column(ForeignKey("receipt_items.id", ondelete="RESTRICT"), index=True)
     description: Mapped[str] = mapped_column(String(200))
     unit: Mapped[str] = mapped_column(String(3))
     received_quantity: Mapped[Decimal] = mapped_column(Numeric(18, 3))
     accepted_quantity: Mapped[Decimal] = mapped_column(Numeric(18, 3), default=Decimal("0"), server_default=text("0"))
     rejected_quantity: Mapped[Decimal] = mapped_column(Numeric(18, 3), default=Decimal("0"), server_default=text("0"))
     pending_quantity: Mapped[Decimal] = mapped_column(Numeric(18, 3))
+    resolved_quantity: Mapped[Decimal] = mapped_column(Numeric(18, 3), default=Decimal("0"), server_default=text("0"))

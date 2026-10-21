@@ -10,7 +10,7 @@ class EmailOutbox(db.Model):
     __tablename__ = "email_outbox"
     __table_args__ = (
         db.UniqueConstraint("kind", "transport", "as_of", "recipient_user_id", name="uq_email_outbox_daily"),
-        CheckConstraint("kind = 'OVERDUE'", name="ck_email_outbox_kind"),
+        CheckConstraint("kind IN ('OVERDUE', 'BLOCKED_INVOICES')", name="ck_email_outbox_kind"),
         CheckConstraint("transport = 'LOCAL_MAILPIT'", name="ck_email_outbox_transport"),
         CheckConstraint("status IN ('PENDING', 'SENDING', 'SENT', 'FAILED', 'UNKNOWN', 'SKIPPED')", name="ck_email_outbox_status"),
         CheckConstraint("attempt_count >= 0 AND attempt_count <= 3", name="ck_email_outbox_attempts"),

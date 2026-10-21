@@ -6,7 +6,7 @@ from sqlalchemy import Date, func, select
 
 from app.extensions import db
 from app.models import Product, PurchaseOrder, PurchaseOrderItem, Role, Supplier, User
-from app.models import Receipt, ReceiptItem
+from app.models import InvoiceAllocation, Receipt, ReceiptItem
 from app.services.audit import record_audit
 
 
@@ -324,7 +324,36 @@ def get_order_delivery(order_id, *, role=Role.ACHIZITII):
             "id", "line_number", "product_id", "description", "unit", "quantity", "expected_date",
         )})
         items[-1].update(accepted_quantity=format(accepted, ".3f"), remaining_quantity=format(remaining, ".3f"), delivery_status=status)
-    return {"id": order["id"], "number": order["number"], "status": order["status"], "items": items}
+    status = delivery_status(len(items), sum(item["delivery_status"] != "COMPLETE" for item in items),
+                             sum(Decimal(item["accepted_quantity"]) > 0 for item in items))
+    return {"id": order["id"], "number": order["number"], "status": order["status"],
+            "delivery_status": status if order["status"] in ("CONFIRMED", "CLOSED") else None, "items": items}
+
+
+def delivery_status(total_lines, remaining_lines, accepted_lines):
+    if not total_lines:
+        return None
+    if not remaining_lines:
+        return "COMPLETE"
+    return "PARTIAL" if accepted_lines else "NOT_RECEIVED"
+
+
+def get_order_invoicing(order_id):
+    order = get_order(order_id, role=Role.CONTABILITATE)
+    delivery = get_order_delivery(order_id, role=Role.CONTABILITATE)
+    ids = [item["id"] for item in order["items"]]
+    allocated = dict(db.session.execute(select(ReceiptItem.purchase_order_item_id, func.sum(InvoiceAllocation.quantity))
+        .join(InvoiceAllocation, InvoiceAllocation.receipt_item_id == ReceiptItem.id)
+        .join(Receipt, Receipt.id == ReceiptItem.receipt_id)
+        .where(ReceiptItem.purchase_order_item_id.in_(ids), Receipt.status == "CONFIRMED", InvoiceAllocation.status == "ACTIVE")
+        .group_by(ReceiptItem.purchase_order_item_id)).all())
+    delivery_by_id = {item["id"]: item for item in delivery["items"]}
+    for item in order["items"]:
+        accepted = Decimal(delivery_by_id[item["id"]]["accepted_quantity"])
+        used = allocated.get(item["id"], Decimal("0"))
+        item.update(accepted_quantity=format(accepted, ".3f"), allocated_quantity=format(used, ".3f"),
+                    available_quantity=format(max(accepted - used, Decimal("0")), ".3f"))
+    return order
 
 
 def bucharest_date(moment=None):
@@ -368,7 +397,37 @@ def list_overdue_items(*, page, per_page, role=Role.ACHIZITII):
 
 def list_orders(*, page, per_page, role=Role.ACHIZITII):
     conditions = visible_orders(role)
-    rows = db.session.execute(select(*header_columns(role)).where(*conditions)
+    rows = db.session.execute(select(*header_columns(role), Supplier.name.label("supplier_name"))
+                              .join(Supplier, Supplier.id == PurchaseOrder.supplier_id).where(*conditions)
                               .order_by(PurchaseOrder.id).offset((page - 1) * per_page).limit(per_page))
-    return {"orders": [read_header(row) for row in rows], "page": page, "per_page": per_page,
+    orders = [read_header(row) for row in rows]
+    by_id = {order["id"]: order for order in orders}
+    for order in orders:
+        order["items"] = []
+    fields = [PurchaseOrderItem.purchase_order_id, PurchaseOrderItem.id, PurchaseOrderItem.line_number,
+              PurchaseOrderItem.product_id, Product.sku, PurchaseOrderItem.description, PurchaseOrderItem.unit,
+              PurchaseOrderItem.quantity]
+    if role != Role.DEPOZIT:
+        fields.append(PurchaseOrderItem.unit_price)
+    lines = db.session.execute(select(*fields).join(Product, Product.id == PurchaseOrderItem.product_id)
+        .where(PurchaseOrderItem.purchase_order_id.in_(by_id))
+        .order_by(PurchaseOrderItem.purchase_order_id, PurchaseOrderItem.line_number)).all() if orders else []
+    for row in lines:
+        item = dict(row._mapping)
+        order_id = item.pop("purchase_order_id")
+        item["quantity"] = format(item["quantity"], ".3f")
+        if role != Role.DEPOZIT:
+            item["unit_price"] = format(item["unit_price"], ".4f")
+        by_id[order_id]["items"].append(item)
+    accepted_totals = accepted_quantities_subquery()
+    accepted = func.coalesce(accepted_totals.c.accepted_quantity, 0)
+    summaries = db.session.execute(select(PurchaseOrderItem.purchase_order_id, func.count(),
+        func.count().filter(PurchaseOrderItem.quantity > accepted), func.count().filter(accepted > 0))
+        .outerjoin(accepted_totals, accepted_totals.c.order_item_id == PurchaseOrderItem.id)
+        .where(PurchaseOrderItem.purchase_order_id.in_([order["id"] for order in orders]))
+        .group_by(PurchaseOrderItem.purchase_order_id)).all() if orders else []
+    states = {order_id: delivery_status(total, remaining, received) for order_id, total, remaining, received in summaries}
+    for order in orders:
+        order["delivery_status"] = states.get(order["id"]) if order["status"] in ("CONFIRMED", "CLOSED") else None
+    return {"orders": orders, "page": page, "per_page": per_page,
             "total": db.session.scalar(select(func.count()).select_from(PurchaseOrder).where(*conditions))}

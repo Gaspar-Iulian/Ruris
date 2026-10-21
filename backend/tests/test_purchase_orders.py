@@ -182,7 +182,8 @@ def test_auth_pagination_and_body_limits(session, setup):
     assert client.post("/api/purchase-orders", headers=headers, json=payload(setup)).status_code == 201
     listing = client.get("/api/purchase-orders?per_page=1").json
     assert listing["total"] == 1
-    assert "items" not in listing["orders"][0]
+    assert len(listing["orders"][0]["items"]) == 1
+    assert listing["orders"][0]["supplier_name"]
     assert client.get("/api/purchase-orders?page=2&per_page=1").json["orders"] == []
     for query in ("page=0", "per_page=101", "page=x", "page=1&page=2", "status=DRAFT"):
         assert client.get(f"/api/purchase-orders?{query}").status_code == 400
