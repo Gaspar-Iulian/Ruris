@@ -21,8 +21,16 @@ momentul eliberarii si audit. Sunt implementate verificarea facturilor si
 `invoice_issues`, cu motive deschise, rezolvate sau depasite de o corectare.
 Sunt implementate cursurile istorice EUR/RON din BNR si conversia pastrata pe factura
 la verificare. Aprobarea explicita, cu reverificare, autor si moment, este implementata.
+Sunt implementate si declared_net_amount, declared_vat_amount si declared_total_amount
+pe factura, separat de sumele calculate. Toate trei sunt NULL sau toate sunt nenegative
+si finite. Aritmetica declarata gresit se poate pastra pentru clarificare, dar blocheaza
+verificarea. Lipsa totalurilor declarate blocheaza verificarea si aprobarea noua.
 Inregistrarea unei plati integrale este implementata pentru facturi APPROVED,
 cu paid_at, paid_by_id, payment_reference si audit. Corectarea platii ramane planificata.
+`attachments` este implementat prin migrarea `0024_document_attachments`,
+cu exact un parinte, autor, motiv, nume original, nume intern aleator, tip, dimensiune,
+SHA-256, cheie UUID de reincercare si retragere documentata. Identitatea si istoricul
+sunt protejate de un trigger; fisierele se pastreaza separat pe disc.
 Restul tabelelor sunt planificate.
 Implementam fiecare grup impreuna cu regulile si testele lui.
 
@@ -129,7 +137,8 @@ inainte sa verifice soldul si sa adauge miscarea.
 
 Starea facturii: DRAFT, BLOCKED, VERIFIED, APPROVED, PAID sau CANCELLED.
 Motivele de blocare se pastreaza separat de stare.
-Factura asteptand cursul este BLOCKED, cu motiv EXCHANGE_RATE_MISSING.
+Factura asteptand cursul este BLOCKED: EXCHANGE_RATE_MISSING pentru preluare/validare
+esuata, EXCHANGE_RATE_NOT_PUBLISHED pentru data absenta din XML-ul valid.
 Factura PAID poate avea o problema noua de rezolvat, fara pierderea starii platii.
 
 Legatura factura-comanda se obtine prin alocare, receptie si pozitia de comanda.

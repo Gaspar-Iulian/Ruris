@@ -179,16 +179,19 @@ def test_blocked_digest_is_captured_once_by_local_mailpit(session, catalog):
     assert "AB 001" in message["Text"]
 
 
-def test_worker_combines_retryable_counts_from_both_channels():
+def test_worker_combines_retryable_counts_from_all_channels():
     overdue = {"as_of": "2026-10-20", "queued": 1, "sent": 1, "states": {"SENT": 1}, "retryable": 0, "skipped_items": 0}
     blocked = {**overdue, "sent": 0, "states": {"FAILED": 1}, "retryable": 1}
-    with patch("app.services.email_delivery.send_overdue_digests_local", return_value=overdue) as first, patch(
+    empty = {**overdue, "queued": 0, "sent": 0, "states": {}}
+    with patch("app.services.email_delivery.send_receipt_digests_local", return_value=empty) as receipts, patch(
+        "app.services.email_delivery.send_overdue_digests_local", return_value=overdue) as first, patch(
         "app.services.email_delivery.send_blocked_invoice_digests_local", return_value=blocked) as second:
         result = send_notification_digests_local(retry_delay_seconds=300)
     assert result["retryable"] == 1 and result["queued"] == 2
     assert result["states"] == {"SENT": 1, "FAILED": 1}
     first.assert_called_once_with(retry_delay_seconds=300)
     second.assert_called_once_with(retry_delay_seconds=300)
+    assert receipts.call_count == 2
 
 
 def test_preview_cli_does_not_queue_or_send(session, catalog):

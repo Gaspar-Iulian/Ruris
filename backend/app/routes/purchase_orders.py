@@ -11,9 +11,26 @@ from app.services.purchase_orders import confirm_order
 from app.services.purchase_orders import get_order_delivery
 from app.services.purchase_orders import list_overdue_items
 from app.services.purchase_orders import get_order_invoicing
+from app.services.document_history import get_document_history
+from app.routes.pagination import pagination_args
 
 
 purchase_orders_bp = Blueprint("purchase_orders", __name__)
+
+
+@purchase_orders_bp.get("/<int:order_id>/history")
+@roles_required(Role.ACHIZITII, Role.DEPOZIT, Role.CONTABILITATE)
+def history(order_id):
+    if not 1 <= order_id <= 9223372036854775807:
+        return jsonify(message="Comanda nu a fost gasita."), 404
+    try:
+        return jsonify(get_document_history("order", order_id, role=current_user.role, **pagination_args(request.args)))
+    except BadRequest as error:
+        return jsonify(message=error.description), 400
+    except OrderNotFoundError as error:
+        return jsonify(message=str(error)), 404
+    except SQLAlchemyError:
+        return jsonify(message="Istoricul nu este disponibil momentan."), 503
 
 
 @purchase_orders_bp.get("/<int:order_id>/invoicing")

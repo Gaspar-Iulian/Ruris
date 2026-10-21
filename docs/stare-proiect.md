@@ -2,9 +2,9 @@
 
 Data evaluării: 21 octombrie 2026.
 
-Acest document separă funcțiile implementate de lucrările propuse. Pachetul
-pentru excepțiile de la recepție este implementat și verificat; lucrările ulterioare
-sunt enumerate separat.
+Acest document separă funcțiile implementate de lucrările propuse. Pachetele
+pentru excepțiile de la recepție, trasabilitate/notificări, reconcilierea facturilor și documente atașate sunt implementate
+și verificate; lucrările ulterioare sunt enumerate separat.
 
 ## 1. Obiectivul aplicației
 
@@ -14,7 +14,8 @@ marfă acceptată și corespunde condițiilor comenzii. Întârzierile și bloca
 trebuie să ajungă la persoanele responsabile, iar operațiile să poată fi urmărite.
 
 Tehnologii folosite: Python, Flask, SQLAlchemy, PostgreSQL, React, bcrypt și JWT.
-Docker pornește momentan PostgreSQL și Mailpit, serviciul local pentru testarea emailurilor.
+Docker pornește PostgreSQL și Mailpit; profilul `notifications` adaugă migrarea
+și workerul permanent. Backendul web și frontendul pornesc momentan separat.
 
 ## 2. Ce avem implementat
 
@@ -30,10 +31,12 @@ Docker pornește momentan PostgreSQL și Mailpit, serviciul local pentru testare
 | Stoc | Mișcări de intrare și solduri calculate din cantitățile acceptate. |
 | Facturi | Factură pornită din comandă sau introdusă manual, în RON/EUR. Asociere la recepții, verificare, aprobare și înregistrarea plății sunt operații distincte. |
 | Diferențe și asocieri | Cantitățile lipsă și diferențele de preț, TVA, monedă sau unitate sunt evidențiate. Cantitatea deja asociată unei facturi nu poate fi folosită din nou. |
-| Corectarea facturilor | O factură poate fi corectată înainte de aprobare, după eliberarea asocierilor active. Schimbările invalidează verificarea anterioară. |
-| Curs valutar | Curs istoric BNR preluat automat la verificarea facturii, cu sursa și conversia păstrate. Calculele monetare folosesc Decimal. |
-| Audit | Operațiile importante păstrează actorul, momentul, motivul și schimbările. Auditul este atomic și protejat împotriva modificării sau ștergerii. Istoricul recepției este vizibil în portal, inclusiv comenzile și cantitățile deciziilor ulterioare. |
-| Notificări | Există worker zilnic, emailuri pentru comenzi întârziate și facturi blocate, jurnal, deduplicare și reîncercări. Trimiterea este configurată momentan către Mailpit local. |
+| Corectarea facturilor | Schimbarea pozițiilor cere eliberarea asocierilor. Totalurile de pe document se pot corecta separat, cu motiv și versiune, păstrând asocierile. Schimbările invalidează verificarea anterioară. |
+| Totaluri furnizor | Net, TVA și total introduse separat din document și comparate cu sumele calculate. Totalurile lipsă, aritmetica inconsistentă și diferențele de un ban blochează verificarea. |
+| Curs valutar | Curs istoric BNR din data exactă a facturii, preluat automat, cu sursa și conversia păstrate. Lipsa publicării și eșecul preluării au explicații distincte și permit reverificarea. Calculele monetare folosesc Decimal. |
+| Audit | Istoric vizibil pentru comenzi, recepții și facturi, cu autor, moment și schimbări înainte/după. Auditul este atomic și protejat împotriva modificării sau ștergerii. Vizibilitatea respectă rolul și documentul, inclusiv eliminarea câmpurilor financiare și a notelor comerciale din istoricul comenzilor văzut de Depozit. |
+| Documente atașate | PDF/PNG/JPG, maximum 10 MB, pentru comenzi, recepții și facturi. Descărcare autentificată, SHA-256, retragere cu motiv, audit și păstrarea fișierelor pe disc la repornire. Acces pe rol și document; facturile cer reverificare după modificarea fișierelor. |
+| Notificări | Worker permanent în Docker, sumar zilnic pentru întârzieri, facturi blocate și clarificări direcționate pe echipe. Jurnal personal în portal, deduplicare, reîncercări și tratarea rezultatelor neclare. SMTP extern cu TLS este configurabil; mediul local folosește Mailpit. |
 | Interfață | Portal în română, culori RURIS, pagini pe rol, formulare și detalii, paginare și căutare în pagina curentă. |
 
 Starea comercială a comenzii și starea livrării sunt separate. O comandă poate
@@ -62,18 +65,15 @@ rețea incert cere actualizarea datelor înaintea unei alte operații.
 | --- | --- | --- |
 | Marfă sosită fără comandă | Implementate sosirea, confirmarea în așteptare, asocierea comercială și decizia ulterioară. | Furnizorul trebuie să existe în catalog; dacă lipsește, Achizițiile îl adaugă mai întâi. |
 | Cantități în așteptare | Implementate acceptarea și respingerea parțială, cu efect asupra stocului, livrării și cantității eligibile pentru facturi. | Corecțiile unor decizii deja definitive rămân un flux separat, viitor. |
-| Trasabilitate accesibilă echipelor | Auditul există în baza de date, iar recepțiile au istoric vizibil, cu acces limitat la documentele permise. | Extinderea istoricului vizibil la comenzi, facturi și administrare. |
-| Emailuri periodice utilizabile la livrare | Logica există; Mailpit este local, workerul nu rulează permanent. | SMTP configurabil, pornire permanentă și verificarea destinatarilor, programării și reîncercărilor. Clarificările trebuie direcționate către echipa responsabilă. |
-| Curs în ziua facturii | Este folosită strict data facturii. Lipsa cursului publicat produce blocaj. | Explicarea în interfață și documentație a acestei situații și testarea scenariilor EUR. Orice regulă alternativă pentru zile fără curs trebuie decisă explicit. |
+| Trasabilitate accesibilă echipelor | Istoric vizibil pentru cele trei tipuri de documente, cu acces limitat pe rol. | Istoricul administrării conturilor poate fi adăugat separat; evenimentele sale există deja în audit. |
+| Emailuri periodice utilizabile la livrare | Worker pornit în Docker, SMTP configurabil, clarificări pe echipe și jurnal personal; Mailpit real verificat. | Configurarea și validarea unui furnizor SMTP în mediul de livrare, cu datele acelui mediu. Trimiterea externă nu a fost executată în teste. |
+| Curs în ziua facturii | Este folosită strict data facturii; blocajele sunt explicate în portal. Sunt testate fluxul EUR până la plată, reluarea după eșec și reutilizarea cursului salvat. | O regulă alternativă pentru zile fără curs trebuie decisă explicit. Testele browser folosesc XML controlat; conexiunea publică BNR este verificată separat. |
 | Stoc complet | Sunt implementate intrările din recepții acceptate. | Pentru un depozit cu consum și retururi: ieșiri, retururi și ajustări documentate. Până atunci, soldul reflectă numai intrările înregistrate. |
-| Portabilitate pe alt PC | Docker pentru baza de date și Mailpit; backendul și frontendul pornesc separat. | Containere pentru backend, frontend și worker, configurare de mediu și verificarea pornirii de la zero. |
+| Portabilitate pe alt PC | Docker pentru PostgreSQL, Mailpit, migrări și worker; backendul și frontendul pornesc separat. | Containere pentru backend și frontend și verificarea pornirii întregului proiect de la zero. |
 | Livrare în Git | Repository configurat și checkpointuri publicate anterior; există lucrări ulterioare în spațiul local. | Checkpoint final și push numai la cererea utilizatorului, apoi verificarea instrucțiunilor de pornire. |
 
 ### Completări utile, distincte de cerințele explicite
 
-- Introducerea totalurilor declarate de furnizor, pentru a le compara cu sumele
-  calculate din poziții; acum totalurile sunt calculate din valorile introduse.
-- Atașarea facturii și a documentelor justificative.
 - Administrarea completă a conturilor și catalogului din interfață.
 - Închiderea justificată a resturilor din comenzi și corecții documentate după
   confirmare sau plată, cu reguli pentru efectele ulterioare.
@@ -96,9 +96,10 @@ Scenarii parcurse prin browser, Flask și PostgreSQL reale, cu date izolate:
 | Factură de 5 M2, blocată, cu 5 M2 acceptați disponibili | „Asociază și verifică”, cu observații, salvează asocierea și produce starea „Verificată”. |
 | Sosire fără comandă, produs neidentificat, 10 bucăți | Stoc inițial 0, factură blocată; Achizițiile identifică sursa, Depozitul acceptă 6 și respinge 4, stocul devine 6. Asocierea și reverificarea permit verificarea și aprobarea facturii de 6. Istoricul și afișarea pe mobil sunt verificate. |
 | 14 sosite pentru o comandă de 10, apoi comandă suplimentară de 4 | Primele 10 rămân pe comanda inițială; cele 4 sunt acceptate separat pe comanda suplimentară. Ambele livrări sunt complete, stocul este 14 și fiecare factură folosește sursa proprie. |
+| Clarificare fără comandă, apoi asociere comercială | Emailul inițial ajunge în Mailpit pentru Achiziții; după asociere, sumarul pentru marfa de acceptat ajunge la Depozit. Jurnalele personale afișează mesajele permise; Depozitul nu primește jurnalul facturilor. |
 
-Aceste scenarii complete au folosit facturi în RON. Nu reprezintă o demonstrație
-completă a livrării prin SMTP extern sau a tuturor situațiilor de curs EUR.
+Scenariile de mai sus folosesc facturi în RON. Pachetul de reconciliere adaugă
+fluxurile EUR descrise mai jos. Trimiterea prin SMTP extern nu a fost executată.
 
 Testele reale folosesc o schemă PostgreSQL temporară și o tranzacție exterioară;
 la final sunt anulate datele și schema. Testele nu efectuează plăți bancare.
@@ -118,6 +119,19 @@ interfață relevante și buildul final. Și aceste selecții se suprapun.
 Migrarea `0021_receipt_exceptions` este aplicată în baza locală. Verificarea
 migrărilor nu a identificat diferențe față de modele. Numărul documentelor și
 mișcările de stoc existente au rămas neschimbate după migrare.
+
+Pentru pachetul de trasabilitate/notificări au trecut 115 teste backend pentru
+istoric, transporturi, programare, deduplicare și concurență, cu Mailpit real
+activat. După ultimele completări au trecut separat 43 de teste relevante.
+Au trecut 112 teste de interfață și toate cele 8 fluxuri complete cu API real,
+inclusiv istoricul unei facturi plătite și emailurile de clarificare. Selecțiile
+backend se suprapun; nu reprezintă un total de teste distincte.
+Ultima corecție de afișare a fost verificată prin 9 teste relevante de interfață
+și buildul final; selecțiile de interfață se suprapun și ele.
+
+Migrarea curentă `0022_notification_channels` este aplicată și verificată, iar
+documentele și stocul au rămas neschimbate. Containerul workerului este pornit;
+repornirea sa a fost verificată fără mesaje sau încercări de trimitere duplicate.
 
 ## 5. Pachet implementat: excepțiile de la recepție
 
@@ -188,8 +202,7 @@ schimbarea sursei restului, de exemplu surplus acoperit de o comandă suplimenta
   și restul comun al comenzii atunci când două recepții sunt acceptate simultan.
 - Decizia, stocul și auditul sunt în aceeași tranzacție: un eșec le anulează împreună.
 
-Integrarea noilor clarificări în emailurile periodice urmează după stabilizarea
-acestui flux, în pachetul de notificări de mai jos.
+Clarificările sunt integrate în emailurile periodice, în pachetul descris mai jos.
 
 ### Scenarii de acceptanță pentru pachet
 
@@ -209,20 +222,186 @@ acestui flux, în pachetul de notificări de mai jos.
 Scenariile principale sunt parcurse în browser, iar validările, permisiunile,
 concurența și anularea la eșec sunt verificate și în testele backend.
 
-## 6. Pachetele următoare, în ordinea propusă
+## 6. Pachet implementat: trasabilitate și notificări
 
-1. **Trasabilitate și notificări:** extinderea istoricului accesibil pe documente, clarificări
-   trimise echipei responsabile, SMTP configurabil și worker pornit permanent.
-2. **Facturi și curs EUR:** scenarii complete pentru conversie și zile fără curs;
-   apoi, dacă includem completarea, totaluri declarate și documente justificative.
-3. **Evidența completă a stocului:** ieșiri, retururi și ajustări, cu reguli explicite
+### Ce poți testa în portal
+
+1. Deschide o comandă și apasă **Istoric**, apoi **Modificări** pentru valorile
+   înainte și după. Achizițiile și Contabilitatea văd datele comerciale permise;
+   Depozitul vede doar datele operaționale.
+2. Din Contabilitate, deschide o factură și istoricul său: asocieri, blocaje,
+   verificare, aprobare și plată. Accesul altor echipe la acest istoric este refuzat.
+3. Din contul unei echipe, deschide **Notificări**. Vezi numai mesajele contului
+   tău și tipurile compatibile cu rolul actual, cu încercări și starea livrării.
+4. Pentru testarea emailurilor locale, consultă Mailpit la <http://127.0.0.1:8025>.
+   Configurația și comenzile de previzualizare/procesare sunt în README.
+
+### Responsabilitatea clarificărilor
+
+- Fără o comandă compatibilă cu rest disponibil: Achiziții. Dacă există un
+  responsabil eligibil al comenzii, mesajul îi revine; altfel este adresat echipei active.
+- Cu acoperire comercială disponibilă: Depozit, pentru decizia de acceptare sau respingere.
+- Pentru acoperire parțială, cantitățile sunt împărțite în cele două sumaruri.
+  Disponibilul comun al unei comenzi nu se repetă pentru mai multe recepții.
+- Emailurile nu includ prețuri și nu rezervă cantități. Operațiile din portal
+  verifică din nou situația curentă.
+
+### Cum rulează workerul
+
+`docker compose --profile notifications up -d --build notification-worker`
+pornește migrările și workerul, cu repornire automată cât timp Docker este activ.
+Mediul local este configurat pentru Mailpit. SMTP extern poate folosi STARTTLS
+sau SSL, cu verificarea certificatului și autentificare configurabilă.
+
+Programarea implicită este zilnic la **08:00 Europe/Bucharest**, cu verificare
+la 60 de secunde. Pornirea după această oră recuperează sumarul zilei. Jurnalul
+din PostgreSQL previne retrimiterea după repornire.
+
+Există cel mult un sumar pe zi pentru utilizator, tip și transport. Situațiile
+noi după un sumar trimis intră în procesarea zilei următoare. Un mesaj neactual
+înainte de trimitere este omis. Eșecurile certe au maximum trei încercări;
+rezultatele neclare nu sunt retrimise automat. Încercările întrerupte mai vechi
+de 10 minute sunt marcate ca neclare la verificarea workerului.
+
+„Acceptat de server” confirmă predarea către SMTP; inboxul destinatarului nu
+este verificat de aplicație. Trimiterea prin SMTP extern trebuie validată cu
+furnizorul și configurația mediului unde va fi livrat proiectul.
+
+### Esențial din cod
+
+- **Proiecția în SQL** întoarce numai câmpurile permise pentru istoricul Depozitului.
+  O interfață care ascunde prețul nu înlocuiește această regulă din backend.
+- **Outbox** înseamnă că mesajul și starea procesării sunt păstrate în baza de date,
+  inclusiv între două porniri ale workerului.
+- **Deduplicarea** folosește o regulă unică în PostgreSQL, nu doar o variabilă în memorie.
+- **TLS** protejează conexiunea la serverul SMTP extern. Datele de autentificare
+  rămân în configurația mediului.
+- **Workerul separat** procesează emailurile independent de cererile utilizatorilor.
+
+## 7. Pachet implementat: totaluri furnizor și fluxuri EUR
+
+1. La crearea facturii introduci **Net factură**, **TVA factură** și **Total factură**
+   din documentul furnizorului. O ciornă poate fi salvată fără aceste valori, dar
+   verificarea o blochează până la completare.
+2. Detaliul compară sumele din poziții cu cele de pe document și afișează diferențele
+   în moneda facturii. Nu există toleranță automată, nici pentru un ban.
+3. **Editează totalurile** permite corectarea înainte de aprobare, cu **Observații
+   operație**, păstrând asocierile active. După salvare, factura cere reverificare.
+4. Pentru EUR, verificarea preia cursul din ziua facturii. Un eșec de preluare sau
+   validare permite **Reîncearcă preluarea cursului**. Un XML valid fără acea dată
+   produce un blocaj distinct; nu se aplică automat cursul zilei anterioare.
+5. Cursul valid se păstrează și se reutilizează. Aprobarea repetă verificările;
+   plata păstrează conversia aprobată. Sursa și data cursului sunt vizibile în portal.
+
+### Date existente
+
+Migrarea `0023_invoice_declared_totals` adaugă trei coloane opționale, fără să
+inventeze valorile documentelor vechi. O factură veche neaprobată, fără totaluri
+declarate, cere completarea lor la următoarea verificare sau aprobare. Documentele
+deja aprobate ori plătite își păstrează starea și nu se modifică prin acest flux.
+
+### Scenarii verificate
+
+- Factură EUR de 10,00, curs de test 5,123400: 51,23 RON, cu rotunjire la doi
+  zecimali, verificare, aprobare și înregistrarea plății în browser.
+- Preluare indisponibilă: blocaj; după reluare, verificare reușită. Aprobarea
+  folosește cursul salvat chiar dacă sursa devine din nou indisponibilă.
+- XML fără data facturii: blocaj explicit, fără conversie și fără aprobare,
+  chiar dacă există în cache un curs pentru altă dată.
+- Total declarat cu un ban mai mare: blocaj; corectarea păstrează marfa asociată,
+  auditul și istoricul, iar reverificarea permite continuarea.
+- Totaluri lipsă, incomplete, negative sau cu precizie excesivă; corectare cu
+  versiune veche, acces din alt rol și eșec de audit: refuz sau anulare atomică.
+
+Testele browser folosesc Flask și PostgreSQL reale, dar XML BNR controlat în
+serverul de test. Rata 5,123400 este exclusiv o valoare de test. Preluarea HTTPS
+din arhiva publică BNR a fost verificată separat pentru 2025-01-03: 4,974900.
+Codul de producție nu conține aceste rate sau rute de configurare a testelor.
+
+Verificarea pachetului: 269 de teste backend pentru facturi, cursuri și recepții,
+17 teste ale formularului de factură și 11 fluxuri complete în browser au trecut.
+Auditul, istoricul, notificările facturilor blocate și concurența alocărilor au
+fost verificate separat. Buildul frontend și `flask db check` au trecut.
+Migrarea este aplicată local; schemele browser temporare au fost eliminate.
+Documentele existente și soldul de 175,000 au rămas neschimbate la verificare.
+
+### Esențial din cod
+
+- `declared_totals` păstrează ce scrie pe document; sumele calculate rămân separate.
+- `Decimal` și `ROUND_HALF_UP` evită erorile de calcul ale numerelor în virgulă mobilă.
+- Corectarea folosește o tranzacție cu audit și control de versiune; schimbările
+  concomitente nu pot suprascrie în tăcere o versiune mai nouă.
+- Un curs salvat este imuabil și legat de data facturii; conversia nu se schimbă
+  la fiecare accesare sau după o problemă de rețea.
+
+## 8. Pachet implementat: documente justificative
+
+În detaliile unei comenzi, recepții sau facturi, apasă **Documente**. Poți
+încărca un fișier, completa observații și descărca documentele permise rolului.
+Fișierele greșite se retrag cu motiv; istoricul și conținutul sunt păstrate.
+Nu există înlocuire în loc sau ștergere.
+
+- Achizițiile gestionează fișierele comenzilor. Contabilitatea le consultă în
+  limitele vizibilității comenzii; Depozitul nu le primește.
+- Depozitul gestionează fișierele recepțiilor. Celelalte două echipe le consultă
+  după confirmarea recepției.
+- Contabilitatea gestionează fișierele facturilor înainte de aprobare. Încărcarea
+  și retragerea cer reverificare, păstrând asocierile cu marfa acceptată.
+- Facturile aprobate sau plătite permit consultarea fișierelor existente.
+- Numele de pe disc este aleator. SHA-256 și dimensiunea sunt verificate înainte
+  de descărcare. Metadatele și istoricul sunt protejate în PostgreSQL.
+- Reîncercarea aceleiași încărcări nu creează duplicate. Un rezultat incert cere
+  consultarea situației curente; fișierele cu un commit incert nu sunt șterse automat.
+
+Migrarea este `0024_document_attachments`. Fișierele sunt implicit în
+`backend/instance/attachments`, excluse din Git și păstrate între reporniri.
+Comanda `flask --app app check-attachments` verifică integritatea și raportează
+fișiere neasociate sau temporare, fără modificări.
+Pentru mutare sunt necesare împreună baza și directorul de fișiere.
+
+### Cum testezi
+
+1. Achiziții: deschide o comandă → **Documente**, încarcă un PDF cu observații,
+   descarcă-l și consultă evenimentul din istoric.
+2. Contabilitate: verifică accesul la acel PDF; Depozitul nu trebuie să vadă secțiunea.
+3. Depozit: atașează avizul sau o fotografie unei recepții confirmate; Achizițiile
+   și Contabilitatea pot consulta dovada.
+4. Contabilitate: atașează PDF-ul unei facturi verificate. Starea revine Ciornă,
+   asocierile rămân. Retrage fișierul greșit cu motiv și adaugă varianta corectă.
+5. Reverifică și aprobă. Documentele existente rămân disponibile; modificarea
+   fișierelor nu mai este permisă în fluxul obișnuit.
+
+Verificări: 76 de teste backend relevante au trecut, inclusiv concurență reală;
+121 de teste UI și 14 fluxuri complete prin browser au trecut. Cele trei fluxuri
+noi verifică documentele comenzilor, recepțiilor și facturilor, cu descărcări
+comparate prin SHA-256 și nume cu diacritice.
+Testele complete folosesc un frontend separat pe 5174 și API temporar pe 5201,
+prin proxy HTTP real, fără interceptarea și rescrierea cererilor în browser.
+Datele și directorul de fișiere ale testului sunt temporare.
+
+Regulile API, stocarea și backupul sunt descrise în [ghidul atașamentelor](atasamente.md).
+
+### Esențial din cod
+
+- `storage_key` este numele intern aleator al fișierului; numele original este
+  doar metadată, pentru afișare și descărcare.
+- `upload_key` identifică operația: o reîncercare cu aceleași date întoarce același
+  document, fără o a doua încărcare sau un al doilea audit.
+- `content_sha256` verifică dacă sunt descărcați exact octeții înregistrați.
+- Tranzacția SQL păstrează împreună metadatele, versiunea și auditul. Fișierele
+  se scriu separat; eșecurile cunoscute și commiturile incerte au tratamente distincte.
+
+## 9. Pachetele următoare, în ordinea propusă
+
+1. **Docker și livrare:** backendul și frontendul în containere, volum persistent
+   pentru fișiere, configurare exemplu, creare administrator și demonstrație pe
+   mediu curat, inclusiv backup/restaurare pentru bază și documente.
+2. **Evidența completă a stocului:** ieșiri, retururi și ajustări, cu reguli explicite
    pentru efectele asupra recepțiilor și facturilor deja asociate.
-4. **Docker și livrare:** toate serviciile, configurare exemplu fără secrete,
-   migrare și creare administrator, ghid de pornire și demonstrație pe mediu curat.
-5. **Acceptanță finală:** scenariile cerute și testele relevante, lista limitărilor
+3. **Acceptanță finală:** scenariile cerute și testele relevante, lista limitărilor
    asumate și checkpoint Git la cererea utilizatorului.
 
-## 7. Cum continuăm lucrul
+## 10. Cum continuăm lucrul
 
 - Chiar și un pachet mai mare se construiește în etape explicabile, cu un rezultat
   complet de testat la final.

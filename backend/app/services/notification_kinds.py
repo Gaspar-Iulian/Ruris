@@ -1,0 +1,9 @@
+from app.models import Role
+
+
+RECIPIENT_ROLES = {
+    "OVERDUE": Role.ACHIZITII,
+    "BLOCKED_INVOICES": Role.CONTABILITATE,
+    "RECEIPT_BUYER": Role.ACHIZITII,
+    "RECEIPT_WAREHOUSE": Role.DEPOZIT,
+}

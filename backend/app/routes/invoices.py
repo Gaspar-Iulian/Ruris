@@ -6,14 +6,61 @@ from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 from app.models import Role
 from app.permissions import roles_required
 from app.services.invoices import InvoiceForbiddenError, InvoiceNotFoundError, create_invoice, get_invoice, list_invoices
-from app.services.invoices import InvoiceConflictError, update_invoice
+from app.services.invoices import InvoiceConflictError, update_invoice, update_declared_totals
 from app.services.invoice_allocations import create_allocations, list_allocations, release_allocations
 from app.services.invoice_verification import approve_invoice, verify_invoice, list_issues
 from app.services.invoice_payments import record_payment
 from app.services.invoice_matching import get_matching
+from app.services.document_history import get_document_history
+from app.routes.pagination import pagination_args
 
 
 invoices_bp = Blueprint("invoices", __name__)
+
+
+@invoices_bp.patch("/<int:invoice_id>/declared-totals")
+@roles_required(Role.CONTABILITATE)
+def declared_totals(invoice_id):
+    if not 1 <= invoice_id <= 9223372036854775807:
+        return jsonify(message="Factura nu a fost gasita."), 404
+    if not request.is_json:
+        return jsonify(message="Cererea trebuie sa contina JSON."), 415
+    request.max_content_length = 4096
+    try:
+        data = request.get_json()
+    except RequestEntityTooLarge:
+        return jsonify(message="Cererea este prea mare."), 413
+    except BadRequest:
+        return jsonify(message="Corpul cererii nu este JSON valid."), 400
+    if not isinstance(data, dict) or set(data) != {"version", "reason", "declared_totals"}:
+        return jsonify(message="Trimite version, reason si declared_totals."), 400
+    try:
+        return jsonify(invoice=update_declared_totals(actor_user_id=current_user.id, invoice_id=invoice_id, **data))
+    except InvoiceForbiddenError as error:
+        return jsonify(message=str(error)), 403
+    except InvoiceNotFoundError as error:
+        return jsonify(message=str(error)), 404
+    except InvoiceConflictError as error:
+        return jsonify(message=str(error)), 409
+    except ValueError as error:
+        return jsonify(message=str(error)), 400
+    except SQLAlchemyError:
+        return jsonify(message="Totalurile nu au putut fi salvate momentan."), 503
+
+
+@invoices_bp.get("/<int:invoice_id>/history")
+@roles_required(Role.CONTABILITATE)
+def history(invoice_id):
+    if not 1 <= invoice_id <= 9223372036854775807:
+        return jsonify(message="Factura nu a fost gasita."), 404
+    try:
+        return jsonify(get_document_history("invoice", invoice_id, role=current_user.role, **pagination_args(request.args)))
+    except BadRequest as error:
+        return jsonify(message=error.description), 400
+    except InvoiceNotFoundError as error:
+        return jsonify(message=str(error)), 404
+    except SQLAlchemyError:
+        return jsonify(message="Istoricul nu este disponibil momentan."), 503
 
 
 @invoices_bp.get("/<int:invoice_id>/matching")
@@ -235,7 +282,7 @@ def update(invoice_id):
         return jsonify(message="Cererea este prea mare."), 413
     except BadRequest:
         return jsonify(message="Corpul cererii nu este JSON valid."), 400
-    if not isinstance(data, dict) or set(data) != {"version", "reason", "supplier_id", "series", "number", "invoice_date", "due_date", "currency", "items"}:
+    if not isinstance(data, dict) or set(data) - {"declared_totals"} != {"version", "reason", "supplier_id", "series", "number", "invoice_date", "due_date", "currency", "items"}:
         return jsonify(message="Trimite toate campurile ciornei, version si reason."), 400
     try:
         invoice = update_invoice(actor_user_id=current_user.id, invoice_id=invoice_id, **data)
@@ -268,7 +315,7 @@ def create():
         return jsonify(message="Cererea este prea mare."), 413
     except BadRequest:
         return jsonify(message="Corpul cererii nu este JSON valid."), 400
-    if not isinstance(data, dict) or set(data) != {"supplier_id", "series", "number", "invoice_date", "due_date", "currency", "items"}:
+    if not isinstance(data, dict) or set(data) - {"declared_totals"} != {"supplier_id", "series", "number", "invoice_date", "due_date", "currency", "items"}:
         return jsonify(message="Trimite supplier_id, series, number, invoice_date, due_date, currency si items."), 400
     try:
         invoice = create_invoice(actor_user_id=current_user.id, **data)

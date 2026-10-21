@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from app.extensions import db
 from app.models import Invoice, InvoiceAllocation, InvoiceIssue, InvoiceItem, PurchaseOrder, PurchaseOrderItem, Receipt, ReceiptItem, Role, User
 from app.services.audit import record_audit
-from app.services.exchange_rates import ExchangeRateUnavailable, get_eur_rate
+from app.services.exchange_rates import ExchangeRateNotPublished, ExchangeRateUnavailable, get_eur_rate
 from app.services.invoice_issues import audit_issue, issue_data
 from app.services.invoices import InvoiceConflictError, InvoiceForbiddenError, InvoiceNotFoundError, invoice_data, money
 from app.services.purchase_orders import positive_id
@@ -92,6 +92,16 @@ def _review_invoice(*, actor_user_id, invoice_id, version, approve=False, reason
             totals = tuple(sum((getattr(item, key) for item in invoice.items), Decimal("0")) for key in ("net_amount", "vat_amount", "total_amount"))
             if totals != (invoice.net_amount, invoice.vat_amount, invoice.total_amount):
                 add("INVOICE_TOTAL_MISMATCH", "Sumele antetului difera fata de totalul pozitiilor.")
+            if invoice.declared_total_amount is None:
+                add("DECLARED_TOTALS_MISSING", "Completeaza netul, TVA si totalul inscrise pe factura furnizorului.")
+            else:
+                if invoice.declared_net_amount + invoice.declared_vat_amount != invoice.declared_total_amount:
+                    add("DECLARED_TOTALS_INCONSISTENT", "Pe document, netul plus TVA nu este egal cu totalul declarat. Solicita clarificarea furnizorului.")
+                for field, label in (("net_amount", "Net"), ("vat_amount", "TVA"), ("total_amount", "Total")):
+                    declared = getattr(invoice, f"declared_{field}")
+                    calculated = getattr(invoice, field)
+                    if declared != calculated:
+                        add(f"DECLARED_{field.upper()}_MISMATCH", f"{label} pe document: {declared:.2f} {invoice.currency}; calculat din pozitii: {calculated:.2f} {invoice.currency}; diferenta: {declared - calculated:+.2f} {invoice.currency}.")
         for key in ("exchange_rate_id", "exchange_rate_value", "exchange_rate_date", "exchange_rate_source", "total_ron"):
             setattr(invoice, key, None)
         try:
@@ -105,8 +115,10 @@ def _review_invoice(*, actor_user_id, invoice_id, version, approve=False, reason
             invoice.exchange_rate_date = invoice.invoice_date
             invoice.exchange_rate_source = "BNR" if rate else "IDENTITY"
             invoice.total_ron = total_ron
-        except ExchangeRateUnavailable as error:
-            add("EXCHANGE_RATE_MISSING", str(error))
+        except ExchangeRateNotPublished:
+            add("EXCHANGE_RATE_NOT_PUBLISHED", f"BNR nu are curs EUR publicat pentru {invoice.invoice_date.isoformat()}. Factura ramane blocata. Verifica data de pe document sau solicita clarificarea furnizorului; nu se foloseste automat cursul altei zile.")
+        except ExchangeRateUnavailable:
+            add("EXCHANGE_RATE_MISSING", f"Cursul BNR pentru {invoice.invoice_date.isoformat()} nu a putut fi obtinut sau validat. Reincearca preluarea cursului. Factura ramane blocata pana la obtinerea unui curs valid.")
         except ValueError:
             add("FX_CONVERSION_OVERFLOW", "Suma convertita depaseste limita monetara permisa.")
         now = db.session.scalar(select(func.clock_timestamp()))

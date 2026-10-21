@@ -113,7 +113,38 @@ Aceasta operatie tine evidenta unei plati integrale; nu trimite ordine bancare.
 Sumarul email al facturilor BLOCKED include doar motivele deschise si este adresat
 conturilor active CONTABILITATE. Rolul, starea si adresa destinatarului sunt
 recontrolate la preluarea mesajului pentru trimitere. Nu se trimit aceste sumaruri
-catre ADMIN, ACHIZITII sau DEPOZIT in aceasta etapa. Transportul ramane Mailpit local.
+catre ADMIN, ACHIZITII sau DEPOZIT. Transportul este configurabil; implicit este Mailpit local.
+
+## Istoric și jurnalul notificărilor
+
+- Istoricul comenzilor are aceeași vizibilitate ca documentul. Depozitul primește
+  numai câmpurile operaționale proiectate în SQL; câmpurile financiare și notele
+  comerciale nu sunt returnate în răspunsul API.
+- Istoricul facturilor este disponibil numai Contabilității, inclusiv evenimentele
+  de asociere, blocare, aprobare și plată.
+- Jurnalul notificărilor returnează numai mesajele destinatarului autentificat,
+  pentru tipurile compatibile cu rolul său actual. Schimbarea rolului nu permite
+  consultarea mesajelor vechi rezervate altui departament.
+- Clarificările fără acoperire comercială sunt adresate Achizițiilor; cantitățile
+  cu acoperire disponibilă sunt adresate Depozitului. Emailurile nu includ prețuri
+  sau totaluri financiare și nu acordă permisiuni suplimentare în portal.
+- Conturile inactive sunt excluse, iar destinatarul și conținutul sunt recontrolate
+  la preluarea mesajului. Administratorul nu vede implicit notificările de business.
+
+## Documente atașate
+
+Atașamentele sunt implementate cu reguli separate pe document:
+
+| Document | Modifică fișierele | Consultă fișierele |
+| --- | --- | --- |
+| Comandă | Achiziții | Achiziții și Contabilitate, conform vizibilității comenzii |
+| Recepție | Depozit | Depozit; Achiziții și Contabilitate numai după confirmare |
+| Factură | Contabilitate, înainte de aprobare | Contabilitate |
+
+Depozitul nu vede fișierele comerciale ale comenzilor, nici metadatele sau
+evenimentele lor din istoric. Administratorul nu are acces implicit.
+Fișierele retrase se păstrează și se pot descărca de către rolurile autorizate,
+cu audit. Nu există ștergere sau modificare în loc. Detalii: [atașamente](atasamente.md).
 
 ## Matricea pentru modulele viitoare
 

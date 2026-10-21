@@ -37,7 +37,7 @@ def seed_data(session):
     receipt = confirm_receipt(actor_user_id=ids[Role.DEPOZIT], receipt_id=receipt["id"], version=1, reason="Numarare",
         items=[{"id": receipt["items"][0]["id"], "accepted_quantity": "6", "pending_quantity": "3", "rejected_quantity": "1"}])
     data = {"supplier_id": supplier_id, "series": "AB", "number": "001", "invoice_date": "2026-10-20",
-            "due_date": "2026-11-20", "currency": "EUR", "items": [
+            "due_date": "2026-11-20", "currency": "EUR", "declared_totals": {"net_amount": "20", "vat_amount": "3.80", "total_amount": "23.80"}, "items": [
                 {"product_id": product_id, "quantity": "10", "unit_price": "2", "vat_rate": "19"}]}
     invoice = create_invoice(actor_user_id=ids[Role.CONTABILITATE], **data)
     client, headers = authorize(ids[Role.CONTABILITATE])

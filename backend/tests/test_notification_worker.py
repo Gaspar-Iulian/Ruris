@@ -13,6 +13,7 @@ def worker_app(monkeypatch):
     app = Flask(__name__)
     app.config.update(EMAIL_DAILY_TIME="08:00", EMAIL_RETRY_SECONDS="300")
     monkeypatch.setattr(worker.db, "session", Mock())
+    monkeypatch.setattr(worker, "recover_stale_deliveries", Mock())
     with app.app_context():
         yield app
 
@@ -25,7 +26,7 @@ def result(*, states=None, retryable=0):
 @pytest.mark.parametrize("clock,due", [("07:59:59", False), ("08:00:00", True), ("11:30:00", True)])
 def test_daily_threshold_and_catchup(worker_app, monkeypatch, clock, due):
     monkeypatch.setattr(worker, "bucharest_now", lambda: datetime.fromisoformat(f"2026-10-20T{clock}"))
-    with patch.object(worker, "send_notification_digests_local", return_value=result()) as send:
+    with patch.object(worker, "send_notification_digests", return_value=result()) as send:
         tick = worker.run_notification_tick()
     assert tick["ran"] is due
     assert send.call_count == int(due)
@@ -37,7 +38,7 @@ def test_daily_threshold_and_catchup(worker_app, monkeypatch, clock, due):
 
 def test_completed_day_is_skipped_and_next_day_runs(worker_app, monkeypatch):
     monkeypatch.setattr(worker, "bucharest_now", lambda: datetime(2026, 10, 20, 12))
-    with patch.object(worker, "send_notification_digests_local", return_value=result()) as send:
+    with patch.object(worker, "send_notification_digests", return_value=result()) as send:
         assert worker.run_notification_tick(last_completed_date=date(2026, 10, 20))["ran"] is False
         assert worker.run_notification_tick(last_completed_date=date(2026, 10, 19))["ran"] is True
     send.assert_called_once()
@@ -45,14 +46,14 @@ def test_completed_day_is_skipped_and_next_day_runs(worker_app, monkeypatch):
 
 def test_retryable_failure_keeps_day_open(worker_app, monkeypatch):
     monkeypatch.setattr(worker, "bucharest_now", lambda: datetime(2026, 10, 20, 8))
-    with patch.object(worker, "send_notification_digests_local", return_value=result(states={"FAILED": 1}, retryable=1)):
+    with patch.object(worker, "send_notification_digests", return_value=result(states={"FAILED": 1}, retryable=1)):
         assert worker.run_notification_tick()["last_completed_date"] is None
 
 
 @pytest.mark.parametrize("status", ["UNKNOWN", "SENDING", "FAILED", "SKIPPED"])
 def test_terminal_or_uncertain_messages_do_not_schedule_blind_retries(worker_app, monkeypatch, status):
     monkeypatch.setattr(worker, "bucharest_now", lambda: datetime(2026, 10, 20, 8))
-    with patch.object(worker, "send_notification_digests_local", return_value=result(states={status: 1}, retryable=0)):
+    with patch.object(worker, "send_notification_digests", return_value=result(states={status: 1}, retryable=0)):
         assert worker.run_notification_tick()["last_completed_date"] == date(2026, 10, 20)
 
 
@@ -69,7 +70,7 @@ def test_invalid_worker_settings_fail_clearly(worker_app, key, value):
 
 def test_database_failure_releases_transaction(worker_app, monkeypatch):
     monkeypatch.setattr(worker, "bucharest_now", lambda: datetime(2026, 10, 20, 8))
-    with patch.object(worker, "send_notification_digests_local", side_effect=SQLAlchemyError("test")):
+    with patch.object(worker, "send_notification_digests", side_effect=SQLAlchemyError("test")):
         with pytest.raises(SQLAlchemyError):
             worker.run_notification_tick()
     worker.db.session.rollback.assert_called_once()

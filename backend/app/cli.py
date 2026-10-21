@@ -1,5 +1,6 @@
 import click
-from threading import Event
+import signal
+from threading import Event, current_thread, main_thread
 from flask.cli import with_appcontext
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
@@ -10,6 +11,52 @@ from app.services.email_delivery import list_email_deliveries, send_overdue_dige
 from app.services.notification_worker import run_notification_tick, worker_settings
 from app.services.notifications import build_blocked_invoice_digests
 from app.services.email_delivery import send_blocked_invoice_digests_local
+from app.services.email_delivery import send_notification_digests
+from app.services.receipt_notifications import build_buyer_receipt_digests, build_warehouse_receipt_digests
+from app.services.mail import configured_transport
+from app.services.attachments import check_attachment_storage
+
+
+@click.command("check-attachments", help="Verifica integritatea fisierelor pastrate, fara modificari.")
+@with_appcontext
+def check_attachments_command():
+    try:
+        result = check_attachment_storage()
+    except (OSError, SQLAlchemyError):
+        raise click.ClickException("Verificarea documentelor nu este disponibila.") from None
+    click.echo(f"Fisiere inregistrate: {result['referenced']}; lipsa sau corupte: {result['missing_or_corrupted']}; neasociate: {result['unreferenced']}; temporare: {result['staged']}.")
+    if any(result[key] for key in ("missing_or_corrupted", "unreferenced", "staged")):
+        raise click.ClickException("Sunt necesare verificari ale spatiului de documente. Nu a fost sters niciun fisier.")
+
+
+@click.command("preview-receipt-emails", help="Previzualizeaza clarificarile pentru Achizitii si Depozit.")
+@with_appcontext
+def preview_receipt_emails_command():
+    try:
+        for builder in (build_buyer_receipt_digests, build_warehouse_receipt_digests):
+            digest = builder()
+            for message in digest["messages"]:
+                click.echo(f"Catre: {message['to']}\nSubiect: {message['subject']}\n\n{message['body']}\n")
+            click.echo(f"Mesaje: {len(digest['messages'])}; pozitii fara destinatar: {digest['skipped_items']}.")
+    except SQLAlchemyError:
+        raise click.ClickException("Clarificarile nu sunt disponibile. Verifica PostgreSQL.") from None
+
+
+@click.command("send-notification-emails", help="Proceseaza notificarile folosind transportul configurat.")
+@with_appcontext
+def send_notification_emails_command():
+    try:
+        result = send_notification_digests()
+    except (ValueError, LocalEmailDeliveryError) as error:
+        raise click.ClickException(str(error)) from None
+    except SQLAlchemyError:
+        raise click.ClickException("Jurnalul nu a putut fi actualizat. Verifica PostgreSQL.") from None
+    click.echo(f"Transport: {configured_transport()}; acceptate: {result['sent']}.")
+    click.echo("Stari: " + ", ".join(f"{status}: {count}" for status, count in sorted(result["states"].items())))
+    if result["skipped_items"]:
+        click.echo(f"Pozitii fara destinatar eligibil: {result['skipped_items']}.")
+    if any(result["states"].get(status) for status in ("FAILED", "UNKNOWN", "SENDING")):
+        raise click.ClickException("Exista trimiteri nereusite sau neclare. Consulta jurnalul notificarilor.")
 
 
 @click.command("preview-blocked-invoice-emails", help="Previzualizeaza sumarul facturilor blocate, fara trimitere.")
@@ -124,19 +171,23 @@ def list_email_deliveries_command(limit):
             click.echo(f"  Urmatoarea incercare (UTC): {delivery['next_attempt_at'].isoformat()}")
 
 
-@click.command("run-notification-worker", help="Ruleaza programarea zilnica a emailurilor catre Mailpit local.")
+@click.command("run-notification-worker", help="Ruleaza programarea zilnica a notificarilor email.")
 @click.option("--once", is_flag=True, help="Verifica o singura data ora si mesajele eligibile.")
 @click.option("--poll-seconds", type=click.IntRange(1, 60), default=60, show_default=True)
 @with_appcontext
 def run_notification_worker_command(once, poll_seconds):
-    """Run the local notification worker."""
+    """Run the notification worker."""
     try:
         daily_time, retry_seconds = worker_settings()
     except ValueError as error:
         raise click.ClickException(str(error)) from None
-    click.echo(f"Notificari locale la {daily_time:%H:%M} Europe/Bucharest; reincercare dupa {retry_seconds} secunde.")
+    click.echo(f"Notificari {configured_transport()} la {daily_time:%H:%M} Europe/Bucharest; reincercare dupa {retry_seconds} secunde.")
     stop = Event()
     completed_date = None
+    previous_handler = None
+    if not once and current_thread() is main_thread():
+        previous_handler = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGTERM, lambda signum, frame: stop.set())
     try:
         while True:
             try:
@@ -157,3 +208,6 @@ def run_notification_worker_command(once, poll_seconds):
                 break
     except KeyboardInterrupt:
         click.echo("Workerul a fost oprit.")
+    finally:
+        if previous_handler is not None:
+            signal.signal(signal.SIGTERM, previous_handler)

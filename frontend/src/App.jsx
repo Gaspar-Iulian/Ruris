@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowDownLeft, ArrowRight, Boxes, Check, ChevronLeft, ChevronRight, CircleAlert, ClipboardList, Eye, EyeOff, FileCheck2, LayoutDashboard, LoaderCircle, LogOut, Menu, Package, RefreshCw, Search, ShieldCheck, ShoppingCart, Truck, Users, X } from 'lucide-react';
+import { ArrowDownLeft, ArrowRight, Bell, Boxes, Check, ChevronLeft, ChevronRight, CircleAlert, ClipboardList, Eye, EyeOff, FileCheck2, LayoutDashboard, LoaderCircle, LogOut, Menu, Package, RefreshCw, Search, ShieldCheck, ShoppingCart, Truck, Users, X } from 'lucide-react';
 import { api } from './api.js';
 import OrderForm from './OrderForm.jsx';
 import UserForm from './UserForm.jsx';
@@ -9,6 +9,9 @@ import InvoiceForm from './InvoiceForm.jsx';
 import InvoiceWorkflow from './InvoiceWorkflow.jsx';
 import ReceiptConfirmation from './ReceiptConfirmation.jsx';
 import ReceiptPendingWorkflow from './ReceiptPendingWorkflow.jsx';
+import DocumentHistory from './DocumentHistory.jsx';
+import DocumentAttachments from './DocumentAttachments.jsx';
+import Notifications from './Notifications.jsx';
 
 const roles = { ADMIN: 'Administrare', ACHIZITII: 'Achiziții', DEPOZIT: 'Depozit', CONTABILITATE: 'Contabilitate' };
 const states = { DRAFT: 'Ciornă', CONFIRMED: 'Confirmată', CLOSED: 'Închisă', CANCELLED: 'Anulată', BLOCKED: 'Blocată', VERIFIED: 'Verificată', APPROVED: 'Aprobată', PAID: 'Plătită' };
@@ -16,6 +19,7 @@ const views = {
   orders: { label: 'Comenzi', icon: ShoppingCart, endpoint: '/purchase-orders', key: 'orders', singular: 'Comandă' },
   receipts: { label: 'Recepții', icon: Truck, endpoint: '/receipts', key: 'receipts', singular: 'Recepție' },
   pending: { label: 'Clarificări', icon: CircleAlert, endpoint: '/receipts/pending', key: 'receipts', singular: 'Recepție' },
+  notifications: { label: 'Notificări', icon: Bell, endpoint: '/notifications', key: 'notifications' },
   invoices: { label: 'Facturi', icon: FileCheck2, endpoint: '/invoices', key: 'invoices', singular: 'Factură' },
   stock: { label: 'Stoc', icon: Boxes, endpoint: '/stock', key: 'stock' },
   products: { label: 'Produse', icon: Package, endpoint: '/products', key: 'products' },
@@ -28,7 +32,7 @@ const catalogForms = {
   'new-product': { kind: 'product', list: 'products', title: 'Produs nou' },
   'new-supplier': { kind: 'supplier', list: 'suppliers', title: 'Furnizor nou' },
 };
-const menus = { ADMIN: ['users'], ACHIZITII: ['orders', 'receipts', 'pending', 'stock', 'products', 'suppliers', 'overdue'], DEPOZIT: ['receipts', 'pending', 'orders', 'stock', 'products', 'suppliers', 'overdue'], CONTABILITATE: ['invoices', 'orders', 'receipts', 'pending', 'stock', 'products', 'suppliers', 'overdue'] };
+const menus = { ADMIN: ['users'], ACHIZITII: ['orders', 'receipts', 'pending', 'stock', 'products', 'suppliers', 'overdue', 'notifications'], DEPOZIT: ['receipts', 'pending', 'orders', 'stock', 'products', 'suppliers', 'overdue', 'notifications'], CONTABILITATE: ['invoices', 'orders', 'receipts', 'pending', 'stock', 'products', 'suppliers', 'overdue', 'notifications'] };
 const dateText = (value) => value ? new Intl.DateTimeFormat('ro-RO', { dateStyle: 'medium' }).format(new Date(value)) : '—';
 const quantity = (value) => value === undefined || value === null ? '—' : String(value).replace('.', ',');
 
@@ -166,6 +170,7 @@ function RecordsTable({ rows, view, role, onDetail }) {
 function Detail({ view, id, role, onClose, onExpired, onConfirmed }) {
   const [refresh, setRefresh] = useState(0);
   const [confirmedDocument, setConfirmedDocument] = useState(null);
+  const [invoiceEditing, setInvoiceEditing] = useState(false);
   const [operationNotice, setOperationNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -200,21 +205,27 @@ function Detail({ view, id, role, onClose, onExpired, onConfirmed }) {
     return () => { dialog.close(); previousFocus?.focus(); };
   }, []);
   return <dialog id="document-dialog" onCancel={(event) => { if (submitting.current) event.preventDefault(); else onClose(); }} aria-labelledby="detail-title" aria-busy={busy}><div className="dialog-heading"><div><span className="eyebrow muted">DETALIU DOCUMENT</span><h2 id="detail-title">{views[view].singular} {view === 'invoices' && document ? [document.series, document.number].filter(Boolean).join(' ') : document?.number || `#${id}`}</h2></div><button className="icon-button" aria-label="Închide detaliile" disabled={busy} onClick={onClose}><X /></button></div>
-    {!document ? <Feedback state={state} /> : <><div className="document-meta"><Status value={document.status} /><span>Versiunea {document.version}</span>{document.currency && <span>{document.currency}</span>}</div>
-      {view === 'invoices' ? <InvoiceWorkflow invoice={document} onExpired={onExpired} onChanged={(updated) => { setConfirmedDocument(updated); onConfirmed(); }} onBusyChange={(value) => { submitting.current = value; setBusy(value); }} /> : view === 'orders' && ['CONFIRMED', 'CLOSED'].includes(document.status) ? <OrderDelivery id={id} onExpired={onExpired} refresh={refresh} /> : <><h3>Pozițiile documentului</h3>{document.items?.length ? <div className="table-scroll"><table><thead><tr><th scope="col">Produs</th><th scope="col">Cantitate</th><th scope="col">Unitate</th>{view === 'receipts' && <><th scope="col">Acceptat</th><th scope="col">Respins</th><th scope="col">În așteptare</th></>}</tr></thead><tbody>{document.items.map((item) => <tr key={item.id}><td>{item.description}</td><td>{quantity(item.quantity ?? item.received_quantity)}</td><td>{item.unit}</td>{view === 'receipts' && <><td>{quantity(item.total_accepted_quantity ?? item.accepted_quantity)}</td><td>{quantity(item.rejected_quantity)}</td><td>{quantity(item.pending_quantity)}</td></>}</tr>)}</tbody></table></div> : <p className="muted">Documentul nu are poziții.</p>}</>}
+    {!document ? <Feedback state={state} /> : <fieldset className="document-body" disabled={busy}><div className="document-meta"><Status value={document.status} /><span>Versiunea {document.version}</span>{document.currency && <span>{document.currency}</span>}</div>
+      {view === 'invoices' ? <InvoiceWorkflow invoice={document} onEditingChange={setInvoiceEditing} onExpired={onExpired} onChanged={(updated) => { setConfirmedDocument(updated); setOperationNotice(''); onConfirmed(); }} onBusyChange={(value) => { submitting.current = value; setBusy(value); }} /> : view === 'orders' && ['CONFIRMED', 'CLOSED'].includes(document.status) ? <OrderDelivery id={id} onExpired={onExpired} refresh={refresh} /> : <><h3>Pozițiile documentului</h3>{document.items?.length ? <div className="table-scroll"><table><thead><tr><th scope="col">Produs</th><th scope="col">Cantitate</th><th scope="col">Unitate</th>{view === 'receipts' && <><th scope="col">Acceptat</th><th scope="col">Respins</th><th scope="col">În așteptare</th></>}</tr></thead><tbody>{document.items.map((item) => <tr key={item.id}><td>{item.description}</td><td>{quantity(item.quantity ?? item.received_quantity)}</td><td>{item.unit}</td>{view === 'receipts' && <><td>{quantity(item.total_accepted_quantity ?? item.accepted_quantity)}</td><td>{quantity(item.rejected_quantity)}</td><td>{quantity(item.pending_quantity)}</td></>}</tr>)}</tbody></table></div> : <p className="muted">Documentul nu are poziții.</p>}</>}
       {(operationNotice || confirmedDocument && view === 'orders') && <div className="notice success-notice" role="status">{operationNotice || 'Comanda a fost confirmată.'}</div>}
       {view === 'receipts' && role === 'DEPOZIT' && document.status === 'DRAFT' && <ReceiptConfirmation key={`${document.id}-${document.version}`} receipt={document} onExpired={onExpired} onConfirmed={(receipt) => { setConfirmedDocument(receipt); setOperationNotice('Recepția a fost confirmată.'); onConfirmed(); }} onBusyChange={(value) => { submitting.current = value; setBusy(value); }} onReload={reload} />}
       {view === 'receipts' && document.status === 'CONFIRMED' && <ReceiptPendingWorkflow key={`${document.id}-${document.version}`} receipt={document} role={role} onExpired={onExpired} onChanged={(receipt, notice) => { setConfirmedDocument(receipt); setOperationNotice(notice); onConfirmed(); }} onBusyChange={(value) => { submitting.current = value; setBusy(value); }} onReload={reload} />}
+      {!invoiceEditing && ['orders', 'invoices'].includes(view) && <DocumentHistory kind={view === 'orders' ? 'order' : 'invoice'} id={document.id} version={document.version} onExpired={onExpired} />}
+      {!invoiceEditing && (view !== 'orders' || role !== 'DEPOZIT') && <DocumentAttachments kind={view} document={document} onExpired={onExpired} onReload={reload} onChanged={(updated, notice) => { setConfirmedDocument(updated); setOperationNotice(notice); onConfirmed(); }} onBusyChange={(value) => { submitting.current = value; setBusy(value); }} />}
       {error && <div className="error-message" role="alert"><CircleAlert size={18} />{error}</div>}
       {(canConfirm || requiresReload) && <div className="document-actions">
         {requiresReload && <button className="button button-secondary" onClick={reload}><RefreshCw size={16} />Actualizează datele</button>}
         {canConfirm && <button className="button button-primary" disabled={busy || requiresReload} onClick={confirm}>{busy ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />}{busy ? 'Se confirmă…' : 'Confirmă comanda'}</button>}
       </div>}
-    </>}
+    </fieldset>}
   </dialog>;
 }
 
-function Records({ view, role, onExpired, compact = false, onNavigate, refresh }) {
+function Records(props) {
+  return props.view === 'notifications' ? <Notifications onExpired={props.onExpired} refresh={props.refresh} /> : <RecordsList {...props} />;
+}
+
+function RecordsList({ view, role, onExpired, compact = false, onNavigate, refresh }) {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [detailId, setDetailId] = useState(null);

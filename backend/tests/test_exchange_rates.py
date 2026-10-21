@@ -19,6 +19,21 @@ def xml(day="2026-10-20", value="5.0000", namespace="https://www.bnr.ro/xsd", *,
             '</Cube></Body></DataSet>').encode()
 
 
+def test_unpublished_invoice_date_blocks_without_using_cached_other_day(setup, session, monkeypatch):
+    cover(setup, session, currency="EUR")
+    monkeypatch.setattr("app.services.exchange_rates.download_year", lambda year: ("https://curs.bnr.ro/test", xml()))
+    assert get_eur_rate(date(2026, 10, 20)).rate == Decimal("5.000000")
+    invoice = session.get(Invoice, setup["invoice"]["id"])
+    invoice.invoice_date = date(2026, 10, 17)
+    session.commit()
+    result = verify(setup, 2).json
+    assert result["invoice"]["status"] == "BLOCKED"
+    assert result["invoice"]["total_ron"] is None
+    assert [issue["code"] for issue in result["issues"]] == ["EXCHANGE_RATE_NOT_PUBLISHED"]
+    assert "2026-10-17" in result["issues"][0]["details"]
+    assert session.scalar(select(func.count()).select_from(ExchangeRate)) == 1
+
+
 @pytest.mark.parametrize("namespace", ["http://www.bnr.ro/xsd", "https://www.bnr.ro/xsd"])
 def test_parser_supports_historical_and_current_namespace(namespace):
     assert parse_eur_rate(xml(namespace=namespace), date(2026, 10, 20)) == Decimal("5.000000")

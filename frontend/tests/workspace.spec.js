@@ -686,6 +686,9 @@ test.describe('invoice creation', () => {
       await login(page);
       await fillInvoice(page);
       await page.getByLabel('Monedă', { exact: true }).selectOption(currency);
+      await page.getByLabel('Net factură', { exact: true }).fill('25,31');
+      await page.getByLabel('TVA factură', { exact: true }).fill('4,81');
+      await page.getByLabel('Total factură', { exact: true }).fill('30,12');
       await page.getByRole('button', { name: 'Salvează ciorna' }).click();
       await expect(page.getByText('Factura EUR 00042 a fost salvată ca ciornă.')).toBeVisible();
       const row = page.getByRole('row').filter({ hasText: 'EUR 00042' });
@@ -693,7 +696,7 @@ test.describe('invoice creation', () => {
       await expect(row).toContainText(`30,12 ${currency}`);
       const sent = mock.requests.find((request) => request.path === '/api/invoices' && request.method === 'POST');
       expect(sent.headers['x-csrf-token']).toBe('test-csrf');
-      expect(sent.body).toEqual({ supplier_id: 1, series: 'EUR', number: '00042', invoice_date: '2026-10-21', due_date: '2026-11-21', currency, items: [{ product_id: 1, quantity: '2.500', unit_price: '10.1250', vat_rate: '19' }] });
+      expect(sent.body).toEqual({ supplier_id: 1, series: 'EUR', number: '00042', invoice_date: '2026-10-21', due_date: '2026-11-21', currency, declared_totals: { net_amount: '25.31', vat_amount: '4.81', total_amount: '30.12' }, items: [{ product_id: 1, quantity: '2.500', unit_price: '10.1250', vat_rate: '19' }] });
       expect(mock.requests.filter((request) => request.method === 'POST').map((request) => request.path)).toEqual(['/api/auth/login', '/api/invoices']);
     });
   }
@@ -707,6 +710,22 @@ test.describe('invoice creation', () => {
     await page.getByRole('button', { name: 'Salvează ciorna' }).click();
     await expect(page.getByText('Factura 00042 a fost salvată ca ciornă.')).toBeVisible();
     expect(mock.requests.find((request) => request.path === '/api/invoices' && request.method === 'POST').body.series).toBe('');
+  });
+
+  test('supplier totals require all three amounts and reject invalid decimal input before submission', async ({ page }) => {
+    const mock = await mockApi(page, 'CONTABILITATE');
+    await login(page);
+    await fillInvoice(page);
+    await page.getByLabel('Net factură', { exact: true }).fill('25,31');
+    await page.getByRole('button', { name: 'Salvează ciorna' }).click();
+    await expect(page.getByRole('alert')).toContainText('Completează toate cele trei totaluri');
+    await page.getByLabel('TVA factură', { exact: true }).fill('4,81');
+    for (const value of ['-1', '30.121', 'NaN', '1e2']) {
+      await page.getByLabel('Total factură', { exact: true }).fill(value);
+      await page.getByRole('button', { name: 'Salvează ciorna' }).click();
+      await expect(page.getByRole('alert')).toContainText('maximum două zecimale');
+    }
+    expect(mock.requests.some((request) => request.path === '/api/invoices' && request.method === 'POST')).toBe(false);
   });
 
   test('validates references, due dates and numeric fields before saving', async ({ page }) => {

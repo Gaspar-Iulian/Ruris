@@ -23,6 +23,53 @@ class InvoiceConflictError(ValueError):
     pass
 
 
+AMOUNT_FIELDS = ("net_amount", "vat_amount", "total_amount")
+UNSET_TOTALS = object()
+
+
+def parse_declared_totals(value):
+    if value is None:
+        return {f"declared_{key}": None for key in AMOUNT_FIELDS}
+    if not isinstance(value, dict) or set(value) != set(AMOUNT_FIELDS):
+        raise ValueError("Totalurile din document necesita net_amount, vat_amount si total_amount.")
+    return {f"declared_{key}": decimal_value(value[key], scale=2, integer_digits=16) for key in AMOUNT_FIELDS}
+
+
+def update_declared_totals(*, actor_user_id, invoice_id, version, reason, declared_totals):
+    try:
+        positive_id(invoice_id)
+        positive_id(version)
+        if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 1000:
+            raise ValueError("Motivul trebuie sa aiba intre 1 si 1000 de caractere.")
+        fields = parse_declared_totals(declared_totals)
+        actor = db.session.scalar(select(User).where(User.id == actor_user_id).with_for_update().execution_options(populate_existing=True))
+        if actor is None or not actor.is_active or actor.role != Role.CONTABILITATE:
+            raise InvoiceForbiddenError("Doar contabilitatea poate modifica totalurile facturii.")
+        invoice = db.session.scalar(select(Invoice).where(Invoice.id == invoice_id).with_for_update().execution_options(populate_existing=True))
+        if invoice is None:
+            raise InvoiceNotFoundError("Factura nu a fost gasita.")
+        if invoice.status not in ("DRAFT", "BLOCKED", "VERIFIED") or invoice.version != version:
+            raise InvoiceConflictError("Factura a fost modificata sau starea nu permite corectarea. Reincarca documentul.")
+        before = invoice_data(invoice, include_items=False)
+        if all(getattr(invoice, key) == value for key, value in fields.items()):
+            db.session.commit()
+            return invoice_data(invoice)
+        invalidate_verification(invoice, actor_user_id=actor.id, reason=reason.strip())
+        for key, value in fields.items():
+            setattr(invoice, key, value)
+        invoice.version += 1
+        after = invoice_data(invoice, include_items=False)
+        record_audit(action="UPDATE", entity_type="invoices", entity_id=invoice.id, actor_user_id=actor.id,
+                     before={key: value for key, value in before.items() if key != "id"},
+                     after={key: value for key, value in after.items() if key != "id"}, reason=reason.strip())
+        result = invoice_data(invoice)
+        db.session.commit()
+        return result
+    except Exception:
+        db.session.rollback()
+        raise
+
+
 def update_invoice(*, actor_user_id, invoice_id, version, reason, **data):
     try:
         positive_id(invoice_id)
@@ -155,6 +202,13 @@ def invoice_data(invoice, *, include_items=True):
         result[key] = getattr(invoice, key).isoformat()
     for key in ("net_amount", "vat_amount", "total_amount"):
         result[key] = format(getattr(invoice, key), ".2f")
+    result["declared_totals"] = None
+    result["totals_difference"] = None
+    if invoice.declared_total_amount is not None:
+        result["declared_totals"] = {key: format(getattr(invoice, f"declared_{key}"), ".2f") for key in AMOUNT_FIELDS}
+        with localcontext() as context:
+            context.prec = 50
+            result["totals_difference"] = {key: format(getattr(invoice, f"declared_{key}") - getattr(invoice, key), ".2f") for key in AMOUNT_FIELDS}
     result["exchange_rate_id"] = invoice.exchange_rate_id
     result["approved_by_id"] = invoice.approved_by_id
     result["approved_at"] = invoice.approved_at.isoformat() if invoice.approved_at else None
@@ -170,7 +224,7 @@ def invoice_data(invoice, *, include_items=True):
     return result
 
 
-def parse_invoice(supplier_id, series, number, invoice_date, due_date, currency, items, *, editing=False):
+def parse_invoice(supplier_id, series, number, invoice_date, due_date, currency, items, *, editing=False, declared_totals=UNSET_TOTALS):
     positive_id(supplier_id)
     series, number = reference(series, 40, optional=True), reference(number, 80)
     invoice_date, due_date = document_date(invoice_date), document_date(due_date)
@@ -200,8 +254,11 @@ def parse_invoice(supplier_id, series, number, invoice_date, due_date, currency,
             parsed.append(values)
         totals = {key: money(sum((item[key] for item in parsed), Decimal("0")))
                   for key in ("net_amount", "vat_amount", "total_amount")}
-    return {"supplier_id": supplier_id, "series": series, "number": number, "invoice_date": invoice_date,
-            "due_date": due_date, "currency": currency, **totals}, parsed
+    fields = {"supplier_id": supplier_id, "series": series, "number": number, "invoice_date": invoice_date,
+              "due_date": due_date, "currency": currency, **totals}
+    if declared_totals is not UNSET_TOTALS:
+        fields.update(parse_declared_totals(declared_totals))
+    return fields, parsed
 
 
 def validate_order_sources(items, supplier_id, products, existing=None):
@@ -227,9 +284,9 @@ def validate_order_sources(items, supplier_id, products, existing=None):
             raise ValueError("Pozitia facturii necesita o comanda confirmata, cu acelasi furnizor, produs si unitate.")
 
 
-def create_invoice(*, actor_user_id, supplier_id, series, number, invoice_date, due_date, currency, items):
+def create_invoice(*, actor_user_id, supplier_id, series, number, invoice_date, due_date, currency, items, declared_totals=None):
     try:
-        fields, parsed = parse_invoice(supplier_id, series, number, invoice_date, due_date, currency, items)
+        fields, parsed = parse_invoice(supplier_id, series, number, invoice_date, due_date, currency, items, declared_totals=declared_totals)
         actor = db.session.scalar(select(User).where(User.id == actor_user_id).with_for_update().execution_options(populate_existing=True))
         if actor is None or not actor.is_active or actor.role != Role.CONTABILITATE:
             raise InvoiceForbiddenError("Doar contabilitatea poate inregistra facturi.")

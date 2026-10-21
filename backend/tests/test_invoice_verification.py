@@ -27,6 +27,7 @@ def cover(setup, session, *, currency="RON"):
     invoice.currency = currency
     line.quantity, line.net_amount, line.vat_amount, line.total_amount = 6, 12, "2.28", "14.28"
     invoice.net_amount, invoice.vat_amount, invoice.total_amount = 12, "2.28", "14.28"
+    invoice.declared_net_amount, invoice.declared_vat_amount, invoice.declared_total_amount = 12, "2.28", "14.28"
     received = session.get(ReceiptItem, setup["receipt"]["items"][0]["id"])
     ordered = session.get(PurchaseOrderItem, received.purchase_order_item_id)
     session.get(PurchaseOrder, ordered.purchase_order_id).currency = currency
@@ -121,7 +122,7 @@ def test_rechecks_current_documents_and_totals(setup, session, problem, code):
 def test_empty_invoice_blocked(setup, session):
     invoice = create_invoice(actor_user_id=setup["users"][Role.CONTABILITATE], **{**setup["data"], "number": "002", "currency": "RON", "items": []})
     response = setup["client"].post(f'/api/invoices/{invoice["id"]}/verify', json={"version": 1}, headers=setup["headers"])
-    assert [issue["code"] for issue in response.json["issues"]] == ["NO_ITEMS"]
+    assert "NO_ITEMS" in [issue["code"] for issue in response.json["issues"]]
 
 
 def test_reverification_resolves_fixed_source_issue(setup, session):

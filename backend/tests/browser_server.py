@@ -4,11 +4,12 @@ import importlib.util
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
+from tempfile import TemporaryDirectory, gettempdir
 
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 import bcrypt
-from flask import jsonify
+from flask import jsonify, request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from sqlalchemy.schema import CreateSchema
@@ -17,12 +18,32 @@ from werkzeug.serving import make_server
 from app import create_app
 from app.extensions import db
 from app.models import Role, User
+from app.services.exchange_rates import ExchangeRateUnavailable
 
 
 def main():
     app = create_app()
     app.config.update(JWT_COOKIE_SECURE=False, RATELIMIT_ENABLED=False)
+    app.config.update(MAIL_TRANSPORT="LOCAL_MAILPIT", MAILPIT_SMTP_HOST="127.0.0.1")
     stopped = False
+    fx_mode = "fixture"
+
+    def exchange_fixture(year):
+        if fx_mode == "unavailable":
+            raise ExchangeRateUnavailable("Simulated network outage")
+        # Keep browser tests independent of the public network.
+        cubes = ''.join(f'<Cube date="{day}"><Rate currency="EUR">5.1234</Rate></Cube>' for day in ("2026-10-20", "2026-10-21"))
+        data = f'<DataSet xmlns="https://www.bnr.ro/xsd"><Header><Publisher>National Bank of Romania</Publisher></Header><Body><OrigCurrency>RON</OrigCurrency>{cubes}</Body></DataSet>'.encode()
+        return f"https://curs.bnr.ro/files/xml/years/nbrfxrates{year}.xml", data
+
+    @app.post("/__test__/fx")
+    def configure_fx():
+        nonlocal fx_mode
+        mode = request.get_json()["mode"]
+        if mode not in ("fixture", "unavailable"):
+            return jsonify(message="Invalid fixture mode"), 400
+        fx_mode = mode
+        return jsonify(mode=fx_mode)
 
     @app.post("/__test__/stop")
     def stop():
@@ -30,7 +51,14 @@ def main():
         stopped = True
         return jsonify(stopped=True)
 
-    with app.app_context():
+    @app.post("/__test__/notifications")
+    def notifications():
+        from app.services.email_delivery import send_notification_digests_local
+        return jsonify(send_notification_digests_local())
+
+    with TemporaryDirectory(prefix="ruris_browser_files_") as storage_directory, app.app_context():
+        assert Path(storage_directory).resolve().is_relative_to(Path(gettempdir()).resolve())
+        app.config["ATTACHMENT_STORAGE_PATH"] = storage_directory
         with db.engine.connect() as connection:
             transaction = connection.begin()
             test_session = Session(bind=connection, join_transaction_mode="create_savepoint")
@@ -44,7 +72,7 @@ def main():
                         module = importlib.util.module_from_spec(spec)
                         spec.loader.exec_module(module)
                         module.upgrade()
-                with patch.object(db, "session", test_session):
+                with patch.object(db, "session", test_session), patch("app.services.exchange_rates.download_year", exchange_fixture):
                     test_session.remove = test_session.rollback
                     original_wsgi = app.wsgi_app
 

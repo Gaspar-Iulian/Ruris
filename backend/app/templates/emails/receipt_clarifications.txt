@@ -1,0 +1,12 @@
+Buna, {{ name }},
+
+{% if buyer %}Receptii cu marfa care necesita acoperire comerciala{% else %}Marfa care asteapta decizia Depozitului{% endif %}, la {{ as_of }}:
+
+{% for item in items %}
+- {{ item.receipt_number }}, pozitia {{ item.line_number }}: {{ item.description }}
+  Furnizor: {{ item.supplier_name }}
+  {% if buyer %}De clarificat{% else %}Disponibil pentru decizie{% endif %}: {{ item.quantity }} {{ item.unit }}{% if item.order_number %}; comanda {{ item.order_number }}{% endif %}
+
+{% endfor %}
+Consulta pagina Clarificari din Portalul Intern RURIS pentru situatia actuala.
+Cantitatile din sumar nu reprezinta o rezervare sau o acceptare automata.

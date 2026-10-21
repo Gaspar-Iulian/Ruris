@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { CircleAlert, LoaderCircle, RefreshCw } from 'lucide-react';
 import { api } from './api.js';
 import InvoiceForm from './InvoiceForm.jsx';
+import DeclaredTotals, { emptyTotals, readTotals } from './DeclaredTotals.jsx';
 
 const display = (value) => String(value ?? '—').replace('.', ',');
 const differenceLabels = { PRICE: 'Preț diferit de comandă', VAT: 'TVA diferit de comandă', CURRENCY: 'Monedă diferită de comandă', UNIT: 'Unitate diferită' };
@@ -39,7 +40,7 @@ function proposal(data) {
   return proposed;
 }
 
-export default function InvoiceWorkflow({ invoice, onChanged, onExpired, onBusyChange }) {
+export default function InvoiceWorkflow({ invoice, onChanged, onExpired, onBusyChange, onEditingChange }) {
   const [state, setState] = useState({ loading: true });
   const [revision, setRevision] = useState(0);
   const [quantities, setQuantities] = useState({});
@@ -49,6 +50,8 @@ export default function InvoiceWorkflow({ invoice, onChanged, onExpired, onBusyC
   const [busy, setBusy] = useState(false);
   const [requiresReload, setRequiresReload] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [editingTotals, setEditingTotals] = useState(false);
+  const [declaredTotals, setDeclaredTotals] = useState(emptyTotals);
   const [paymentReference, setPaymentReference] = useState('');
   const [paidAt, setPaidAt] = useState(localNow);
   const submitting = useRef(false);
@@ -68,6 +71,7 @@ export default function InvoiceWorkflow({ invoice, onChanged, onExpired, onBusyC
   }, [invoice.id, invoice.version, revision, onExpired]);
   useEffect(() => { if (error) errorBox.current?.focus(); }, [error]);
   useEffect(() => { if (invoice.status === 'APPROVED') setPaidAt(localNow()); }, [invoice.status]);
+  useEffect(() => { onEditingChange?.(editing || editingTotals); }, [editing, editingTotals, onEditingChange]);
 
   function setWorking(value) { submitting.current = value; setBusy(value); onBusyChange(value); }
 
@@ -84,16 +88,18 @@ export default function InvoiceWorkflow({ invoice, onChanged, onExpired, onBusyC
     } finally { setWorking(false); }
   }
 
-  async function perform(action, payload, message, needsReason = true, verifyAfter = false) {
+  async function perform(action, payload, message, needsReason = true, verifyAfter = false, method = 'POST') {
     if (submitting.current || requiresReload) return;
+    if (editingTotals && action !== 'declared-totals') { setError('Salvează sau anulează editarea totalurilor înainte de altă operație.'); return; }
     if (needsReason && !reason.trim()) { setError('Completează observațiile operației.'); return; }
     setWorking(true); setError(''); setNotice('');
     try {
-      const result = await api(`/invoices/${invoice.id}/${action}`, { method: 'POST', body: { version: state.data.invoice.version, ...payload, ...(needsReason ? { reason: reason.trim() } : {}) } });
+      const result = await api(`/invoices/${invoice.id}/${action}`, { method, body: { version: state.data.invoice.version, ...payload, ...(needsReason ? { reason: reason.trim() } : {}) } });
       if (verifyAfter) await api(`/invoices/${invoice.id}/verify`, { method: 'POST', body: { version: result.version } });
       const data = await api(`/invoices/${invoice.id}/matching`);
       setState({ data }); setQuantities({}); onChanged(data.invoice);
       setNotice(verifyAfter ? (data.invoice.status === 'VERIFIED' ? 'Asocierile au fost salvate. Factura este verificată.' : 'Asocierile au fost salvate. Factura are în continuare blocaje.') : message);
+      if (action === 'declared-totals') setEditingTotals(false);
     } catch (failure) {
       if ([401, 422].includes(failure.status)) onExpired();
       else if (failure.status === 0 || failure.status >= 500) {
@@ -131,6 +137,14 @@ export default function InvoiceWorkflow({ invoice, onChanged, onExpired, onBusyC
     perform('pay', { payment_reference: paymentReference.trim(), paid_at: moment.toISOString() }, 'Plata a fost înregistrată.');
   }
 
+  function saveTotals() {
+    try {
+      const parsed = readTotals(declaredTotals);
+      if (parsed === null) { setError('Completează netul, TVA și totalul de pe document.'); return; }
+      perform('declared-totals', { declared_totals: parsed }, 'Totalurile au fost salvate. Verifică din nou factura.', true, false, 'PATCH');
+    } catch (failure) { setError(failure.message); }
+  }
+
   if (state.loading) return <div className="feedback" role="status"><LoaderCircle className="spin" size={22} />Se încarcă factura…</div>;
   if (state.error) return <div className="catalog-error"><p role="alert">{state.error}</p><button className="button button-secondary" onClick={() => setRevision((value) => value + 1)}>Reîncarcă factura</button></div>;
   const data = state.data;
@@ -141,12 +155,19 @@ export default function InvoiceWorkflow({ invoice, onChanged, onExpired, onBusyC
 
   return <section className="invoice-workflow" aria-label="Procesare factură">
     <div className="invoice-summary"><span>Net: <strong>{display(current.net_amount)} {current.currency}</strong></span><span>TVA: <strong>{display(current.vat_amount)} {current.currency}</strong></span><span>Total: <strong>{display(current.total_amount)} {current.currency}</strong></span></div>
+    <section className="invoice-totals-comparison" aria-label="Comparare totaluri"><h3>Totaluri factură ({current.currency})</h3>
+      {current.declared_totals ? <div className="table-scroll"><table><thead><tr><th>Sumă</th><th>Din poziții</th><th>Pe document</th><th>Diferență</th></tr></thead><tbody>{[['net_amount', 'Net'], ['vat_amount', 'TVA'], ['total_amount', 'Total']].map(([key, label]) => <tr key={key}><th scope="row">{label}</th><td>{display(current[key])}</td><td>{display(current.declared_totals[key])}</td><td className={current.totals_difference?.[key] !== '0.00' ? 'candidate-difference' : ''}>{display(current.totals_difference?.[key])}</td></tr>)}</tbody></table></div> : <p className="notice">Totalurile de pe document nu sunt completate. Completează-le înainte de verificare.</p>}
+    </section>
     {current.total_ron !== null && current.total_ron !== undefined && <div className="notice">Total în RON: <strong>{display(current.total_ron)}</strong>{current.exchange_rate_source === 'BNR' && <> · Curs BNR: {display(current.exchange_rate_value)} · Data cursului: {current.exchange_rate_date}</>}</div>}
+    {current.currency === 'EUR' && !current.total_ron && <p className="field-hint">Cursul BNR din {current.invoice_date} se preia la verificare. Conversia necesită un curs publicat pentru această dată.</p>}
+    {current.exchange_rate_source === 'BNR' && <p className="field-hint"><a href={`https://curs.bnr.ro/files/xml/years/nbrfxrates${current.exchange_rate_date.slice(0, 4)}.xml`} target="_blank" rel="noreferrer">Sursa cursului BNR</a></p>}
     {notice && <div className="notice success-notice" role="status">{notice}</div>}
     {error && <div className="error-message" role="alert" tabIndex={-1} ref={errorBox}><CircleAlert size={18} />{error}</div>}
     {requiresReload && <button className="button button-secondary" disabled={busy} onClick={refresh}><RefreshCw size={16} />Actualizează factura</button>}
     {data.issues.length > 0 && <section className="invoice-issues" aria-label="Blocaje factură"><h3>De clarificat</h3>{data.issues.map((issue) => <div key={issue.id} className="invoice-issue"><p>{issue.details}</p><small>Responsabil: {roleLabels[issue.responsible_role] || issue.responsible_role}</small></div>)}{canAssociate && <p className="invoice-issue">Există marfă disponibilă, dar încă neasociată. Completează observațiile și apasă „Asociază și verifică”.</p>}</section>}
     <fieldset className="order-fields" disabled={busy || requiresReload}>
+      {mutable && <div className="workflow-actions"><button className="button button-secondary" onClick={() => { setEditingTotals((value) => !value); setDeclaredTotals(current.declared_totals || emptyTotals()); setError(''); }}>{editingTotals ? 'Anulează totalurile' : 'Editează totalurile'}</button>{data.issues.some((issue) => ['EXCHANGE_RATE_MISSING', 'EXCHANGE_RATE_NOT_PUBLISHED'].includes(issue.code)) && <button className="button button-secondary" onClick={() => perform('verify', {}, 'Cursul și factura au fost verificate din nou.', false)}>Reîncearcă preluarea cursului</button>}</div>}
+      {editingTotals && <><DeclaredTotals values={declaredTotals} onChange={setDeclaredTotals} currency={current.currency} /><button className="button button-primary" onClick={saveTotals}>Salvează totalurile</button></>}
       {mutable && <><div className="workflow-actions"><button className="button button-secondary" onClick={suggest}>Propune asocierea</button>{data.allocations.length === 0 && <button className="button button-secondary" onClick={() => { setError(''); setEditing(true); }}>Corectează factura</button>}</div><p className="field-hint">Asociază doar cantitățile acceptate. Propunerea se salvează separat.</p></>}
       {data.items.map((line) => <section className="invoice-match-line" key={line.id} aria-label={`Poziția facturii ${line.line_number}`}><h3>{line.line_number}. {line.description}</h3><p className="field-hint">Facturat: {display(line.quantity)} {line.unit} · Asociat: {display(line.allocated_quantity)} · Neacoperit: {display(line.remaining_quantity)} · Preț: {display(line.unit_price)} {current.currency} · TVA: {display(line.vat_rate)}%</p>
         {mutable && (line.candidates.length ? line.candidates.map((candidate) => <div className="invoice-candidate" key={candidate.receipt_item_id}><div><strong>{candidate.receipt_number} · {candidate.order_number}</strong><p>Acceptat: {display(candidate.accepted_quantity)} · Asociat facturilor: {display(candidate.allocated_quantity)} · Disponibil: {display(candidate.available_quantity)}</p>{candidate.differences.length > 0 && <p className="candidate-difference">{candidate.differences.map((code) => differenceLabels[code]).join(' · ')}. Comandă: {display(candidate.order_unit_price)} {candidate.order_currency}, TVA {display(candidate.order_vat_rate)}%.</p>}</div><div className="form-field"><label htmlFor={`allocation-${line.id}-${candidate.receipt_item_id}`}>De asociat · poziția {line.line_number} · {candidate.receipt_number}</label><input id={`allocation-${line.id}-${candidate.receipt_item_id}`} inputMode="decimal" maxLength={19} disabled={!candidate.eligible || quantity(candidate.available_quantity).scaled === 0n} value={quantities[`${line.id}:${candidate.receipt_item_id}`] || ''} onChange={(event) => setQuantities((previous) => ({ ...previous, [`${line.id}:${candidate.receipt_item_id}`]: event.target.value }))} /></div></div>) : <p className="notice">Nu există recepții confirmate cu marfă acceptată pentru această poziție.</p>)}

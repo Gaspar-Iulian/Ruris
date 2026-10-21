@@ -146,6 +146,7 @@ function ReceiptHistory({ id, version, onExpired }) {
   }, [id, version, page, attempt, onExpired]);
 
   function eventText(event) {
+    if (event.entity_type === 'attachments') return `${({ UPLOAD: 'Fișier atașat', WITHDRAW: 'Fișier retras', DOWNLOAD: 'Descărcare pregătită' })[event.action] || 'Fișier'}: ${event.after?.original_name || event.before?.original_name || ''}`;
     const prefix = event.line_number ? `Poziția ${event.line_number}: ` : '';
     if (event.action === 'ACCEPT' || event.action === 'REJECT') {
       return `${prefix}${event.action === 'ACCEPT' ? 'acceptate' : 'respinse'} ${quantityDifference(event.before.pending_quantity, event.after.pending_quantity)} ${event.after.unit}${event.order_number ? ` · ${event.order_number}` : ''}`;

@@ -71,6 +71,7 @@ ENTITY_FIELDS["invoice_issues"] = {
 }
 ENTITY_ACTIONS["invoice_issues"] = {"OPEN", "UPDATE", "RESOLVE", "SUPERSEDE"}
 ENTITY_FIELDS["invoices"].update({
+    "declared_totals": (dict, type(None)), "totals_difference": (dict, type(None)),
     "approved_by_id": (int, type(None)), "approved_at": (str, type(None)),
     "paid_by_id": (int, type(None)), "paid_at": (str, type(None)), "payment_reference": (str, type(None)),
     "exchange_rate_id": (int, type(None)), "exchange_rate_source": (str, type(None)),
@@ -79,6 +80,13 @@ ENTITY_FIELDS["invoices"].update({
 ENTITY_FIELDS["exchange_rates"] = {"currency": str, "rate_date": str, "rate": str,
                                     "source": str, "source_url": str, "content_sha256": str}
 ENTITY_ACTIONS["exchange_rates"] = {"FETCH"}
+ENTITY_FIELDS["attachments"] = {
+    "purchase_order_id": (int, type(None)), "receipt_id": (int, type(None)), "invoice_id": (int, type(None)),
+    "original_name": str, "media_type": str, "size_bytes": int, "content_sha256": str,
+    "upload_reason": str, "uploaded_by_id": int, "created_at": str, "status": str,
+    "withdrawn_by_id": (int, type(None)), "withdrawn_at": (str, type(None)), "withdrawal_reason": (str, type(None)),
+}
+ENTITY_ACTIONS["attachments"] = {"UPLOAD", "DOWNLOAD", "WITHDRAW"}
 
 
 def user_snapshot(user):
@@ -102,6 +110,11 @@ def validate_snapshot(data, fields=USER_FIELDS):
             raise ValueError("Valoarea unui camp de audit nu este valida.")
         if key == "role":
             value = Role(value).value
+        if key in {"declared_totals", "totals_difference"} and value is not None:
+            amount_fields = {"net_amount": str, "vat_amount": str, "total_amount": str}
+            if value.keys() != amount_fields.keys():
+                raise ValueError("Totalurile de audit necesita toate cele trei sume.")
+            value = validate_snapshot(value, amount_fields)
         result[key] = value
     return result
 

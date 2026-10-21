@@ -5,11 +5,12 @@ Aplicatie interna pentru achizitii, depozit si contabilitate.
 Proiectarea este descrisa in [arhitectura](docs/arhitectura.md),
 in [procesele si regulile aplicatiei](docs/procese.md)
 si in [schema bazei de date](docs/schema-date.md).
+Funcțiile disponibile și lucrările rămase sunt în [starea proiectului](docs/stare-proiect.md).
 
 ## Tehnologii
 
 - Backend: Python si Flask.
-- Frontend: React si TypeScript.
+- Frontend: React și JavaScript (JSX), cu Vite.
 - Baza de date: PostgreSQL.
 - Parole: bcrypt.
 - Autentificare: JWT.
@@ -40,22 +41,19 @@ Ruris/
 
 ## Stare
 
-Backendul are un endpoint de verificare: GET /api/health.
-Acesta verifica doar functionarea API-ului, fara conectare la baza de date.
-Configurarea PostgreSQL prin Docker Compose este pregatita.
-Flask incarca setarile din `.env` si initializeaza SQLAlchemy pentru PostgreSQL.
-Modelul User si migrarea `0001_users` sunt pregatite.
-Jurnalul de audit si migrarea `0002_audit_events` sunt pregatite.
-PostgreSQL a fost pornit prin Compose, iar cele patru migrari au fost aplicate si verificate.
-POST /api/auth/login autentifica un cont activ si emite JWT prin cookie.
-GET /api/auth/me verifica sesiunea si returneaza datele curente ale contului.
-POST /api/auth/logout revoca tokenul curent in PostgreSQL si sterge cookie-urile.
-RBAC este implementat, iar lista utilizatorilor este accesibila doar rolului ADMIN.
-POST /api/users permite administratorului sa creeze conturi pentru cele trei echipe, cu audit.
-PATCH /api/users/<id>/status permite activarea si dezactivarea conturilor, cu audit.
-PATCH /api/users/<id>/role permite schimbarea rolului, cu motiv si audit.
-Modulele de business vor urma separat.
-Flask-Migrate este configurat, iar folderul `backend/migrations` este initializat.
+Fluxul din portal acoperă catalogul, comenzile, recepțiile parțiale și fără comandă,
+stocul de intrări, facturarea, verificarea, aprobarea și înregistrarea plății.
+Istoricul comenzilor, recepțiilor și facturilor respectă rolurile utilizatorilor.
+Notificările includ întârzieri, facturi blocate și clarificări ale recepțiilor,
+cu jurnal personal, deduplicare și reîncercări.
+
+Docker Compose pornește PostgreSQL și Mailpit. Profilul `notifications` adaugă
+migrarea și workerul permanent. SMTP extern este configurabil cu TLS; dezvoltarea
+și testele de trimitere folosesc Mailpit local. Backendul și frontendul pornesc
+momentan separat. Migrarea curentă este `0024_document_attachments`.
+
+`GET /api/health` verifică funcționarea API-ului, fără conectare la baza de date.
+Limitările și scenariile de test sunt descrise în documentul cu starea proiectului.
 
 ## Pornire backend pe Windows
 
@@ -1347,10 +1345,10 @@ trimise ca texte zecimale. Sumele sunt calculate de server cu Decimal:
 netul liniei = cantitate * pret, rotunjit la 2 zecimale cu ROUND_HALF_UP;
 TVA liniei = net rotunjit * procent / 100, rotunjit la 2 zecimale.
 Totalurile antetului sunt suma valorilor liniilor. Exemplul produce net 1.01,
-TVA 0.19 si total 1.20 EUR. Aceasta conventie va necesita reconciliere cu valorile
-documentului furnizorului in etapa verificarii facturilor.
+TVA 0.19 si total 1.20 EUR. Verificarea compara aceste valori cu totalurile
+introduse separat din documentul furnizorului, fara toleranta implicita.
 
-Factura se creeaza in DRAFT. Clientul nu poate impune totaluri, stare sau autor.
+Factura se creeaza in DRAFT. Clientul nu poate impune totalurile calculate, starea sau autorul.
 Factura, liniile si auditul sunt salvate intr-o singura tranzactie: o eroare
 anuleaza intreaga operatie. Alocarea si verificarea sunt descrise mai jos;
 aprobarea si inregistrarea platii sunt descrise mai jos.
@@ -1526,8 +1524,8 @@ devine VERIFIED. Pentru EUR se preia cursul istoric BNR sau se reutilizeaza cel
 pastrat local. In lipsa lui se deschide EXCHANGE_RATE_MISSING. Nu folosim curs fictiv
 sau cursul zilei curente pentru o factura din alta zi.
 VERIFIED reprezinta rezultatul verificarilor implementate, nu aprobare sau plata.
-Reconcilierea cu sume declarate separat pe documentul furnizorului si atasamentele
-nu sunt implementate inca; inregistrarea actuala calculeaza sumele din linii.
+Reconcilierea cu sume declarate separat pe documentul furnizorului este implementata.
+Atasamentele sunt implementate; regulile si rutele sunt in [ghidul documentelor atasate](docs/atasamente.md).
 
 Codurile posibile sunt NO_ITEMS, QUANTITY_NOT_COVERED, SOURCE_MISSING,
 RECEIPT_NOT_CONFIRMED, ORDER_NOT_CONFIRMED, RECEIPT_OVERALLOCATED,
@@ -2038,8 +2036,8 @@ citit din campul invoice, apoi lista afiseaza documentul si totalul calculat.
 Salvarea nu aloca receptii, nu verifica factura si nu modifica stocul sau platile.
 Cursul EUR va fi preluat de fluxul de verificare existent, nu la crearea ciornei.
 Asocierea facturii cu receptiile, verificarea si aprobarea urmeaza separat in UI.
-Totalul declarat pe documentul furnizorului si atasarea fisierului nu sunt inca
-incluse in acest formular.
+Formularul include separat netul, TVA si totalul de pe documentul furnizorului.
+Atasarea fisierului se face dupa salvare, din detaliul facturii, sectiunea Documente.
 
 Factura duplicata si erorile de validare pastreaza formularul. Pe durata salvarii,
 campurile si butonul sunt blocate. Un rezultat incert de retea sau server opreste
@@ -2131,7 +2129,7 @@ $env:PYTHONPATH = (Get-Location).Path
 .\.venv\Scripts\python.exe tests/browser_server.py
 ```
 
-Cu frontendul disponibil pe 127.0.0.1:5173, intr-un alt terminal din frontend:
+Intr-un alt terminal din frontend; Playwright porneste automat frontendul de test pe 5174:
 
 ```powershell
 $env:RURIS_REAL_API = '1'
@@ -2233,4 +2231,202 @@ acoperă și concurența, permisiunile și anularea întregii operații la eșec
 Datele automate sunt izolate de datele locale ale utilizatorului.
 
 Pașii manuali și lucrările rămase sunt în [starea proiectului](docs/stare-proiect.md).
-Emailurile pentru aceste clarificări vor fi integrate în pachetul de notificări.
+Emailurile pentru aceste clarificări sunt integrate în workerul de notificări.
+
+## Istoric, notificări și worker permanent
+
+În detaliul unei comenzi sau facturi, **Istoric** încarcă operațiile paginate,
+cu autor, moment, motiv și valori înainte/după. Sunt păstrate și pozițiile
+eliminate din ciorne. Facturile includ asocierile, blocajele, verificările,
+aprobarea și plata. Istoricul recepției rămâne disponibil în detaliile sale.
+
+`GET /api/purchase-orders/<id>/history` respectă vizibilitatea comenzii. Depozitul
+primește doar câmpurile operaționale; prețurile, TVA, moneda și notele comerciale
+sunt eliminate înainte de trimiterea răspunsului. `GET /api/invoices/<id>/history`
+este rezervat Contabilității. Ambele acceptă numai `page` și `per_page`.
+
+**Notificări** afișează numai mesajele utilizatorului autentificat, compatibile
+cu rolul său actual, inclusiv stările și încercările de livrare. API-ul este
+`GET /api/notifications`, cu aceeași paginare. Administratorul tehnic nu are
+acces implicit la jurnalul de business al angajaților.
+
+Workerul procesează patru tipuri de sumar:
+
+| Tip | Destinatari |
+| --- | --- |
+| Comenzi întârziate | Responsabilul activ al comenzii, din Achiziții |
+| Facturi blocate | Conturile active din Contabilitate |
+| Recepții fără acoperire comercială | Responsabilul comenzii, dacă este eligibil; în lipsa lui, conturile active din Achiziții |
+| Marfă în așteptare cu acoperire disponibilă | Conturile active din Depozit |
+
+Pentru o acoperire parțială, cantitățile sunt separate între cele două echipe.
+Restul aceleiași comenzi nu este numărat repetat pentru mai multe recepții.
+Sumarul email nu rezervă și nu acceptă marfa. Destinatarul și actualitatea
+conținutului sunt reverificate înainte de preluarea mesajului pentru trimitere.
+
+În rădăcina proiectului, după configurarea `.env`:
+
+```powershell
+docker compose --profile notifications up -d --build notification-worker
+docker compose --profile notifications logs --tail 30 notification-worker
+```
+
+Serviciul `migrate` aplică migrările înainte de pornirea workerului; terminarea
+lui cu `Exited (0)` este normală. Workerul are `restart: unless-stopped` și
+funcționează cât timp Docker este pornit. Oprirea sa controlată se face cu:
+
+```powershell
+docker compose --profile notifications stop notification-worker
+```
+
+Ora implicită este `EMAIL_DAILY_TIME=08:00`, în `Europe/Bucharest`, cu verificare
+la 60 de secunde și reîncercări la `EMAIL_RETRY_SECONDS=300`. Pornirea după ora
+programată recuperează procesarea zilei. Jurnalul PostgreSQL împiedică retrimiterea
+unui sumar deja procesat după repornirea workerului.
+
+Un utilizator primește cel mult un sumar pe zi pentru fiecare tip și transport.
+Situațiile apărute după sumarul trimis intră în ziua următoare. O modificare a
+conținutului înainte de trimitere marchează vechiul mesaj ca neactual, fără a-l
+trimite. Eșecurile certe au cel mult trei încercări. Rezultatele neclare nu sunt
+retrimise automat; încercările rămase în curs peste 10 minute sunt marcate
+`UNKNOWN` la verificarea workerului. „Acceptat de server” confirmă predarea
+către SMTP, nu citirea sau livrarea în inboxul destinatarului.
+
+Configurația implicită `MAIL_TRANSPORT=LOCAL_MAILPIT` folosește Mailpit. Din
+Windows, gazda este `127.0.0.1`; workerul din Compose folosește serviciul `mailpit`
+și portul intern `1025`. Inboxul local este la <http://127.0.0.1:8025>.
+
+Pentru un server extern, configurați în `.env` `MAIL_TRANSPORT=SMTP`, `SMTP_HOST`,
+`SMTP_PORT`, `SMTP_FROM_EMAIL` și `SMTP_SECURITY=STARTTLS` sau `SSL`. Autentificarea
+opțională cere împreună `SMTP_USERNAME` și `SMTP_PASSWORD`. TLS verifică certificatul;
+transportul SMTP extern nu permite conexiune necriptată. Reporniți workerul după
+schimbarea configurației. Secretele rămân în `.env`, care nu este inclus în Git
+sau în imaginea Docker.
+
+Din `backend`, comenzile de operare sunt:
+
+```powershell
+.\.venv\Scripts\python.exe -m flask --app app preview-receipt-emails
+.\.venv\Scripts\python.exe -m flask --app app send-notification-emails
+.\.venv\Scripts\python.exe -m flask --app app list-email-deliveries
+```
+
+Previzualizarea nu salvează și nu trimite mesaje. `send-notification-emails`
+procesează imediat folosind transportul configurat, cu aceeași deduplicare zilnică.
+Comenzile mai vechi cu sufixul `-local` și `send-test-email` rămân limitate la Mailpit.
+
+Migrarea `0022_notification_channels` extinde tipurile și transporturile din
+jurnal, păstrând documentele și stocul existent. Verificările includ PostgreSQL,
+concurență, SMTP simulat, capturare reală în Mailpit, 112 teste de interfață și
+8 fluxuri complete în browser. Trimiterea printr-un furnizor SMTP extern necesită
+configurația mediului de livrare și nu a fost executată în aceste teste.
+
+## Totaluri din factura furnizorului și situații de curs BNR
+
+Migrarea `0023_invoice_declared_totals` adaugă separat pe factură
+`declared_net_amount`, `declared_vat_amount` și `declared_total_amount`.
+Totalurile calculate din poziții rămân în `net_amount`, `vat_amount`, `total_amount`.
+Nu se copiază automat sumele calculate în câmpurile furnizorului.
+
+La `POST /api/invoices` și `PATCH /api/invoices/{id}`, câmpul suplimentar
+`declared_totals` este opțional:
+
+```json
+{
+  "declared_totals": {
+    "net_amount": "12.00",
+    "vat_amount": "2.28",
+    "total_amount": "14.28"
+  }
+}
+```
+
+Acesta este un fragment al cererii; celelalte câmpuri obligatorii rămân cele
+documentate la crearea sau corectarea facturii. Sumele sunt texte zecimale,
+nenegative, cu maximum doi zecimali. Un obiect incomplet este refuzat cu 400.
+`null` permite o ciornă incompletă. La corectarea completă, omiterea câmpului
+păstrează valorile existente; `null` le șterge explicit și cere reverificare.
+Corectarea completă păstrează regula eliberării asocierilor active.
+
+Pentru modificarea exclusivă a totalurilor se folosește:
+
+```http
+PATCH /api/invoices/1/declared-totals
+Content-Type: application/json
+X-CSRF-TOKEN: <csrf>
+```
+
+```json
+{
+  "version": 3,
+  "reason": "Corectie conform documentului furnizorului",
+  "declared_totals": {
+    "net_amount": "12.00",
+    "vat_amount": "2.28",
+    "total_amount": "14.28"
+  }
+}
+```
+
+Doar Contabilitatea are acces. Operația permite DRAFT, BLOCKED și VERIFIED,
+verifică versiunea și motivul, păstrează asocierile active și cantitățile, închide
+blocajele vechi ca SUPERSEDED, invalidează verificarea și conversia, crește
+versiunea și salvează auditul în aceeași tranzacție. Un rezultat identic nu
+modifică versiunea. APPROVED și PAID nu pot fi modificate; o versiune depășită
+produce 409. Răspunsul conține `invoice`.
+
+Răspunsurile facturilor includ `declared_totals` și `totals_difference`, fiecare
+cu cele trei chei de mai sus, sau `null` dacă totalurile lipsesc.
+Diferența este **declarat minus calculat**, în moneda facturii. API-ul nu acceptă
+ca utilizatorul să suprascrie diferența sau totalurile calculate.
+
+Verificarea și aprobarea compară exact sumele și deschid, după caz:
+
+- `DECLARED_TOTALS_MISSING`: lipsesc totalurile furnizorului.
+- `DECLARED_TOTALS_INCONSISTENT`: netul declarat plus TVA diferă de totalul declarat.
+- `DECLARED_NET_AMOUNT_MISMATCH`, `DECLARED_VAT_AMOUNT_MISMATCH`,
+  `DECLARED_TOTAL_AMOUNT_MISMATCH`: sumele diferă de cele calculate din poziții.
+
+Un document cu aritmetică inconsistentă poate fi înregistrat pentru clarificare,
+dar nu poate fi verificat sau aprobat. Nu există toleranță automată de rotunjire.
+În portal, **Editează totalurile** folosește operația separată; completează și
+**Observații operație**, apoi salvează și verifică din nou.
+
+Pentru EUR, cursul este preluat exclusiv pentru data facturii:
+
+- `EXCHANGE_RATE_MISSING`: sursa nu a putut fi preluată sau validată; se poate reîncerca.
+- `EXCHANGE_RATE_NOT_PUBLISHED`: XML-ul valid nu conține un curs pentru data
+  documentului. Factura rămâne blocată, inclusiv în zile fără publicare.
+
+Nu se utilizează automat un curs din ziua anterioară. Corectează data numai dacă
+ai introdus-o greșit față de document; altfel este necesară clarificarea facturii
+ori o regulă de afaceri aprobată separat. Pentru o reluare, portalul oferă
+**Reîncearcă preluarea cursului**. Cursul salvat, sursa și data sunt afișate,
+iar aprobarea îl reutilizează fără o nouă dependență de rețea.
+
+Facturile existente nu primesc totaluri inventate prin migrare. Cele încă
+neaprobate cer completarea înaintea următoarei verificări sau aprobări.
+Documentele deja aprobate ori plătite își păstrează starea și conversia.
+Atașamentele sunt implementate în pachetul separat descris în [ghidul documentelor](docs/atasamente.md).
+
+Scenariile browser folosesc Flask și PostgreSQL reale și XML BNR controlat doar
+în serverul de test, cu rată 5,123400. Este verificat calculul 10,00 EUR → 51,23 RON,
+blocajul la eșecul preluării, reluarea, aprobarea folosind cache-ul și înregistrarea
+plății. Sursa HTTPS publică a fost verificată separat pentru 2025-01-03: 4,974900.
+
+## Documente justificative
+
+În detaliul unei comenzi, recepții sau facturi, secțiunea **Documente** permite
+încărcare PDF/PNG/JPG de maximum 10 MB, descărcare și retragere cu motiv.
+Accesul respectă rolul și vizibilitatea documentului. Depozitul nu primește
+fișierele comerciale ale comenzilor. Facturile aprobate sau plătite sunt numai
+pentru consultare; modificarea fișierelor înainte de aprobare cere reverificare.
+
+Migrarea `0024_document_attachments` păstrează metadatele, autorii, SHA-256 și
+istoricul retragerilor. Conținutul este implicit în `backend/instance/attachments`,
+exclus din Git și păstrat la repornirea backendului. Pentru mutare sau backup
+trebuie păstrate împreună baza PostgreSQL și directorul de fișiere.
+
+Detalii despre permisiuni, rutele API, idempotență, rezultate incerte, stocare,
+backup și comanda `flask --app app check-attachments` sunt în
+[docs/atasamente.md](docs/atasamente.md).

@@ -38,7 +38,16 @@ def get_config():
     )
 
     return {
+        "ATTACHMENT_STORAGE_PATH": os.getenv("ATTACHMENT_STORAGE_PATH") or str(project_root / "instance" / "attachments"),
+        "MAIL_TRANSPORT": os.getenv("MAIL_TRANSPORT", "LOCAL_MAILPIT"),
+        "MAILPIT_SMTP_HOST": os.getenv("MAILPIT_SMTP_HOST", "127.0.0.1"),
         "MAILPIT_SMTP_PORT": os.getenv("MAILPIT_SMTP_PORT", "1025"),
+        "SMTP_HOST": os.getenv("SMTP_HOST", ""),
+        "SMTP_PORT": os.getenv("SMTP_PORT", "587"),
+        "SMTP_SECURITY": os.getenv("SMTP_SECURITY", "STARTTLS"),
+        "SMTP_USERNAME": os.getenv("SMTP_USERNAME", ""),
+        "SMTP_PASSWORD": os.getenv("SMTP_PASSWORD", ""),
+        "SMTP_FROM_EMAIL": os.getenv("SMTP_FROM_EMAIL", ""),
         "EMAIL_DAILY_TIME": os.getenv("EMAIL_DAILY_TIME", "08:00"),
         "EMAIL_RETRY_SECONDS": os.getenv("EMAIL_RETRY_SECONDS", "300"),
         "RATELIMIT_STORAGE_URI": "memory://",

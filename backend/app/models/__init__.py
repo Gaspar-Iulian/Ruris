@@ -11,5 +11,6 @@ from app.models.invoice import Invoice, InvoiceItem
 from app.models.invoice_allocation import InvoiceAllocation
 from app.models.invoice_issue import InvoiceIssue
 from app.models.exchange_rate import ExchangeRate
+from app.models.attachment import Attachment
 
-__all__ = ["AuditEvent", "EmailAttempt", "EmailOutbox", "ExchangeRate", "Invoice", "InvoiceAllocation", "InvoiceItem", "InvoiceIssue", "Product", "PurchaseOrder", "PurchaseOrderItem", "Receipt", "ReceiptItem", "RevokedToken", "Role", "StockMovement", "Supplier", "User"]
+__all__ = ["Attachment", "AuditEvent", "EmailAttempt", "EmailOutbox", "ExchangeRate", "Invoice", "InvoiceAllocation", "InvoiceItem", "InvoiceIssue", "Product", "PurchaseOrder", "PurchaseOrderItem", "Receipt", "ReceiptItem", "RevokedToken", "Role", "StockMovement", "Supplier", "User"]

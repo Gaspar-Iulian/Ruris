@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, CircleAlert, LoaderCircle, Plus, Save, Trash2 } from 'lucide-react';
 import { api } from './api.js';
+import DeclaredTotals, { emptyTotals, readTotals } from './DeclaredTotals.jsx';
 
 const newLine = () => ({ key: crypto.randomUUID(), product_id: '', quantity: '1', unit_price: '', vat_rate: '0' });
 
@@ -32,6 +33,7 @@ export default function InvoiceForm({ onExpired, onCancel, onCreated, initialInv
   const [invoiceDate, setInvoiceDate] = useState(initialInvoice?.invoice_date || '');
   const [dueDate, setDueDate] = useState(initialInvoice?.due_date || '');
   const [currency, setCurrency] = useState(initialInvoice?.currency || 'RON');
+  const [declaredTotals, setDeclaredTotals] = useState(() => initialInvoice?.declared_totals || emptyTotals());
   const [lines, setLines] = useState(() => initialInvoice ? initialInvoice.items.map((item) => ({ ...newLine(), ...item, product_id: String(item.product_id) })) : []);
   const [reason, setReason] = useState('');
   const [choices, setChoices] = useState({ loading: true, suppliers: [], products: [], orders: [] });
@@ -113,11 +115,13 @@ export default function InvoiceForm({ onExpired, onCancel, onCreated, initialInv
         ...(editing && line.id ? { id: line.id } : {}),
         ...(line.purchase_order_item_id ? { purchase_order_item_id: line.purchase_order_item_id } : {}) });
     }
+    let totals;
+    try { totals = readTotals(declaredTotals); } catch (failure) { setError(failure.message); return; }
     submitting.current = true; setSaving(true); onBusyChange(true);
     try {
       const result = await api(editing ? `/invoices/${initialInvoice.id}` : '/invoices', { method: editing ? 'PATCH' : 'POST', body: {
         supplier_id: Number(supplierId), series: normalizedSeries, number: normalizedNumber,
-        invoice_date: invoiceDate, due_date: dueDate, currency, items,
+        invoice_date: invoiceDate, due_date: dueDate, currency, items, declared_totals: totals,
         ...(editing ? { version: initialInvoice.version, reason: reason.trim() } : {}),
       } });
       onCreated(result.invoice);
@@ -159,6 +163,7 @@ export default function InvoiceForm({ onExpired, onCancel, onCreated, initialInv
           {[['quantity', 'Cantitate', 19], ['unit_price', 'Preț unitar', 19], ['vat_rate', 'TVA (%)', 6]].map(([field, label, limit]) => <div className="form-field" key={field}><label htmlFor={`${line.key}-${field}`}>{label} {index + 1}</label><input id={`${line.key}-${field}`} required inputMode="decimal" maxLength={limit} value={line[field]} onChange={(event) => changeLine(line.key, field, event.target.value)} /></div>)}
         </div>{line.source && <p className="invoice-source-quantities">Comandat: {line.source.quantity.replace('.', ',')} {line.source.unit} · Acceptat: {line.source.accepted_quantity.replace('.', ',')} · Asociat facturilor: {line.source.allocated_quantity.replace('.', ',')} · Disponibil de asociat: {line.source.available_quantity.replace('.', ',')}</p>}</div>)}
       </section>
+      <DeclaredTotals values={declaredTotals} onChange={setDeclaredTotals} currency={currency} />
     </fieldset>
     <div className="order-form-footer"><button type="button" className="button button-secondary" disabled={saving} onClick={onCancel}><ArrowLeft size={16} />{uncertain ? 'Vezi facturile' : 'Anulează'}</button><button type="submit" className="button button-primary" disabled={saving || uncertain || noCatalog || needsOrder || !lines.length}>{saving ? <LoaderCircle className="spin" size={17} /> : <Save size={17} />}{saving ? 'Se salvează…' : editing ? 'Salvează modificările' : 'Salvează ciorna'}</button></div>
   </form>;

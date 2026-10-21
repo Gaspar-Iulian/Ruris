@@ -23,6 +23,10 @@ class ExchangeRateUnavailable(ValueError):
     pass
 
 
+class ExchangeRateNotPublished(ExchangeRateUnavailable):
+    pass
+
+
 class NoRedirects(HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, message, headers, newurl):
         raise ExchangeRateUnavailable("Sursa BNR a redirectionat cererea.")
@@ -67,7 +71,7 @@ def parse_eur_rate(data, requested_date):
             raise ValueError()
         cubes = [cube for cube in root.findall("b:Body/b:Cube", ns) if cube.get("date") == requested_date.isoformat()]
         if not cubes:
-            raise ExchangeRateUnavailable("BNR nu are curs publicat pentru data exacta a facturii.")
+            raise ExchangeRateNotPublished("BNR nu are curs publicat pentru data exacta a facturii.")
         if len(cubes) != 1:
             raise ValueError()
         rates = [item for item in cubes[0].findall("b:Rate", ns) if item.get("currency") == "EUR"]

@@ -8,8 +8,10 @@ from sqlalchemy.dialects.postgresql import insert
 from app.extensions import db
 from app.models import EmailAttempt, EmailOutbox, Role, User
 from app.services.audit import record_audit
-from app.services.mail import LocalEmailDeliveryError, send_to_local_mailpit
+from app.services.mail import LocalEmailDeliveryError, configured_transport, mail_settings, send_email, send_to_local_mailpit
 from app.services.notifications import build_blocked_invoice_digests, build_overdue_digests
+from app.services.receipt_notifications import build_buyer_receipt_digests, build_warehouse_receipt_digests
+from app.services.notification_kinds import RECIPIENT_ROLES
 
 
 def content_hash(message):
@@ -25,8 +27,10 @@ def snapshot(delivery):
 
 
 def audit_delivery(delivery, action, before=None):
+    process = {"OVERDUE": "overdue_email", "BLOCKED_INVOICES": "blocked_invoice_email",
+               "RECEIPT_BUYER": "buyer_receipt_email", "RECEIPT_WAREHOUSE": "warehouse_receipt_email"}[delivery.kind]
     record_audit(action=action, entity_type="email_outbox", entity_id=delivery.id,
-                 actor_process="overdue_email_local" if delivery.kind == "OVERDUE" else "blocked_invoice_email_local",
+                 actor_process=process + ("_local" if delivery.transport == "LOCAL_MAILPIT" else "_smtp"),
                  before=before, after=snapshot(delivery))
 
 
@@ -38,13 +42,15 @@ def queue_blocked_invoice_emails():
     return queue_digest(kind="BLOCKED_INVOICES", builder=build_blocked_invoice_digests)
 
 
-def queue_digest(*, kind, builder):
+def queue_digest(*, kind, builder, transport="LOCAL_MAILPIT"):
+    if kind not in RECIPIENT_ROLES or transport not in ("LOCAL_MAILPIT", "SMTP"):
+        raise ValueError("Canalul de notificare nu este valid.")
     try:
         digest = builder()
         queued = 0
         for message in digest["messages"]:
             delivery_id = db.session.scalar(insert(EmailOutbox).values(
-                kind=kind, transport="LOCAL_MAILPIT", as_of=date.fromisoformat(digest["as_of"]),
+                kind=kind, transport=transport, as_of=date.fromisoformat(digest["as_of"]),
                 recipient_user_id=message["recipient_user_id"], recipient_email=message["to"], subject=message["subject"],
                 body=message["body"], content_hash=content_hash(message), status="PENDING", attempt_count=0,
             ).on_conflict_do_nothing(constraint="uq_email_outbox_daily").returning(EmailOutbox.id))
@@ -71,7 +77,7 @@ def claim_delivery(delivery_id, fresh_messages):
         user = db.session.scalar(select(User).where(User.id == delivery.recipient_user_id).execution_options(populate_existing=True))
         fresh = fresh_messages.get(delivery.recipient_user_id)
         before = snapshot(delivery)
-        required_role = {"OVERDUE": Role.ACHIZITII, "BLOCKED_INVOICES": Role.CONTABILITATE}.get(delivery.kind)
+        required_role = RECIPIENT_ROLES.get(delivery.kind)
         if (required_role is None or user is None or not user.is_active or user.role != required_role or user.email != delivery.recipient_email
                 or fresh is None or content_hash(fresh) != delivery.content_hash):
             delivery.status = "SKIPPED"
@@ -89,7 +95,7 @@ def claim_delivery(delivery_id, fresh_messages):
         db.session.flush()
         audit_delivery(delivery, "START", before)
         payload = {"to": delivery.recipient_email, "subject": delivery.subject, "body": delivery.body,
-                   "message_id": f"<ruris-{'overdue' if delivery.kind == 'OVERDUE' else 'blocked-invoices'}-{delivery.id}@example.test>"}
+                   "message_id": f"<ruris-{delivery.kind.lower().replace('_', '-')}-{delivery.id}@example.test>"}
         result = {"delivery_id": delivery.id, "attempt_id": attempt.id, "payload": payload}
         # Persist the claim before contacting SMTP.
         db.session.commit()
@@ -137,15 +143,63 @@ def send_blocked_invoice_digests_local(*, retry_delay_seconds=0):
 def send_notification_digests_local(*, retry_delay_seconds=0):
     overdue = send_overdue_digests_local(retry_delay_seconds=retry_delay_seconds)
     blocked = send_blocked_invoice_digests_local(retry_delay_seconds=retry_delay_seconds)
-    states = dict(overdue["states"])
-    for status, count in blocked["states"].items():
-        states[status] = states.get(status, 0) + count
-    return {"as_of": blocked["as_of"], "queued": overdue["queued"] + blocked["queued"],
-            "skipped_items": overdue["skipped_items"] + blocked["skipped_items"], "sent": overdue["sent"] + blocked["sent"],
-            "states": states, "retryable": overdue["retryable"] + blocked["retryable"]}
+    buyer = send_receipt_digests_local(kind="RECEIPT_BUYER", builder=build_buyer_receipt_digests, retry_delay_seconds=retry_delay_seconds)
+    warehouse = send_receipt_digests_local(kind="RECEIPT_WAREHOUSE", builder=build_warehouse_receipt_digests, retry_delay_seconds=retry_delay_seconds)
+    return combine_results([overdue, blocked, buyer, warehouse])
+
+
+def combine_results(results):
+    states = {}
+    for result in results:
+        for status, count in result["states"].items():
+            states[status] = states.get(status, 0) + count
+    return {"as_of": results[0]["as_of"], "states": states,
+            **{key: sum(result[key] for result in results) for key in ("queued", "skipped_items", "sent", "retryable")}}
+
+
+def send_receipt_digests_local(*, kind, builder, retry_delay_seconds=0):
+    return send_digest_local(kind=kind, builder=builder, queue=lambda: queue_digest(kind=kind, builder=builder),
+                             retry_delay_seconds=retry_delay_seconds)
+
+
+def send_notification_digests(*, retry_delay_seconds=0):
+    transport = configured_transport()
+    mail_settings(transport)
+    recover_stale_deliveries(transport)
+    if transport == "LOCAL_MAILPIT":
+        return send_notification_digests_local(retry_delay_seconds=retry_delay_seconds)
+    channels = [("OVERDUE", build_overdue_digests), ("BLOCKED_INVOICES", build_blocked_invoice_digests),
+                ("RECEIPT_BUYER", build_buyer_receipt_digests), ("RECEIPT_WAREHOUSE", build_warehouse_receipt_digests)]
+    results = []
+    for kind, builder in channels:
+        results.append(send_digest(kind=kind, builder=builder, transport=transport, retry_delay_seconds=retry_delay_seconds,
+            queue=lambda: queue_digest(kind=kind, builder=builder, transport=transport)))
+    return combine_results(results)
+
+
+def recover_stale_deliveries(transport):
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=10)
+    try:
+        while True:
+            stale = db.session.execute(select(EmailOutbox.id, EmailAttempt.id.label("attempt_id"))
+                .join(EmailAttempt, EmailAttempt.outbox_id == EmailOutbox.id)
+                .where(EmailOutbox.transport == transport, EmailOutbox.status == "SENDING", EmailAttempt.status == "SENDING",
+                       EmailAttempt.attempt_number == EmailOutbox.attempt_count, EmailAttempt.started_at < cutoff)
+                .order_by(EmailOutbox.id).limit(1).with_for_update(of=EmailOutbox, skip_locked=True)).first()
+            if stale is None:
+                db.session.commit()
+                return
+            finish_delivery({"delivery_id": stale.id, "attempt_id": stale.attempt_id}, status="UNKNOWN", error_code="WORKER_INTERRUPTED")
+    except Exception:
+        db.session.rollback()
+        raise
 
 
 def send_digest_local(*, kind, builder, queue, retry_delay_seconds=0):
+    return send_digest(kind=kind, builder=builder, queue=queue, transport="LOCAL_MAILPIT", retry_delay_seconds=retry_delay_seconds)
+
+
+def send_digest(*, kind, builder, queue, transport, retry_delay_seconds=0):
     if type(retry_delay_seconds) is not int or not 0 <= retry_delay_seconds <= 3600:
         raise ValueError("Intervalul de reincercare trebuie sa fie intre 0 si 3600 de secunde.")
     queued = queue()
@@ -153,7 +207,7 @@ def send_digest_local(*, kind, builder, queue, retry_delay_seconds=0):
         fresh = builder()
         fresh_messages = {message["recipient_user_id"]: message for message in fresh["messages"]}
         day = date.fromisoformat(queued["as_of"])
-        ids = db.session.scalars(select(EmailOutbox.id).where(EmailOutbox.as_of == day, EmailOutbox.transport == "LOCAL_MAILPIT", EmailOutbox.kind == kind)
+        ids = db.session.scalars(select(EmailOutbox.id).where(EmailOutbox.as_of == day, EmailOutbox.transport == transport, EmailOutbox.kind == kind)
                                  .order_by(EmailOutbox.id)).all()
         db.session.commit()
     except Exception:
@@ -165,7 +219,10 @@ def send_digest_local(*, kind, builder, queue, retry_delay_seconds=0):
         if claim is None:
             continue
         try:
-            send_to_local_mailpit(claim["payload"])
+            if transport == "LOCAL_MAILPIT":
+                send_to_local_mailpit(claim["payload"])
+            else:
+                send_email(claim["payload"], transport=transport)
         except LocalEmailDeliveryError as error:
             status = "UNKNOWN" if error.delivery_unknown else "FAILED"
             finish_delivery(claim, status=status, error_code="SMTP_RESULT_UNKNOWN" if error.delivery_unknown else "SMTP_NOT_ACCEPTED",
@@ -174,10 +231,10 @@ def send_digest_local(*, kind, builder, queue, retry_delay_seconds=0):
             finish_delivery(claim, status="SENT")
             sent += 1
     states = dict(db.session.execute(select(EmailOutbox.status, func.count()).where(EmailOutbox.as_of == day,
-                                                                               EmailOutbox.transport == "LOCAL_MAILPIT", EmailOutbox.kind == kind)
+                                                                               EmailOutbox.transport == transport, EmailOutbox.kind == kind)
                                      .group_by(EmailOutbox.status)).all())
     retryable = db.session.scalar(select(func.count()).select_from(EmailOutbox).where(
-        EmailOutbox.as_of == day, EmailOutbox.transport == "LOCAL_MAILPIT", EmailOutbox.kind == kind,
+        EmailOutbox.as_of == day, EmailOutbox.transport == transport, EmailOutbox.kind == kind,
         EmailOutbox.status.in_(("PENDING", "FAILED")), EmailOutbox.attempt_count < 3,
     ))
     return {**queued, "sent": sent, "states": states, "retryable": retryable}

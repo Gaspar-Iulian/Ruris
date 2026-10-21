@@ -123,7 +123,7 @@ def test_surplus_uses_supplementary_order_without_changing_initial_acceptance(se
 def test_blocked_invoice_becomes_verifiable_only_after_acceptance_and_allocation(session, data):
     receipt = arrival(data)
     invoice = create_invoice(actor_user_id=data["users"][Role.CONTABILITATE], supplier_id=data["supplier_id"], series="", number="PENDING",
-        invoice_date="2026-10-21", due_date="2026-11-21", currency="RON", items=[{
+        invoice_date="2026-10-21", due_date="2026-11-21", currency="RON", declared_totals={"net_amount": "12", "vat_amount": "0", "total_amount": "12"}, items=[{
             "product_id": data["product_id"], "purchase_order_item_id": data["order"]["items"][0]["id"],
             "quantity": "6", "unit_price": "2", "vat_rate": "0"}])
     client, headers = authorize(data["users"][Role.CONTABILITATE])

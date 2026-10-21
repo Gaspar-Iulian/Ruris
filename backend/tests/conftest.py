@@ -51,6 +51,9 @@ def session():
                         "0019_blocked_invoice_emails.py",
                         "0020_invoice_order_source.py",
                         "0021_receipt_exceptions.py",
+                        "0022_notification_channels.py",
+                        "0023_invoice_declared_totals.py",
+                        "0024_document_attachments.py",
                     ):
                         spec = importlib.util.spec_from_file_location(filename[:-3], migrations / filename)
                         migration = importlib.util.module_from_spec(spec)

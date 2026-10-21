@@ -218,7 +218,10 @@ def receipt_history(receipt_id, *, role, page, per_page):
         raise ReceiptNotFoundError("Receptia nu a fost gasita.")
     by_id = {item.id: item for item in receipt.items}
     condition = or_(and_(AuditEvent.entity_type == "receipts", AuditEvent.entity_id == receipt_id),
-                    and_(AuditEvent.entity_type == "receipt_items", AuditEvent.entity_id.in_(by_id)))
+                    and_(AuditEvent.entity_type == "receipt_items", AuditEvent.entity_id.in_(by_id)),
+                    and_(AuditEvent.entity_type == "attachments", or_(
+                        AuditEvent.before_data.contains({"receipt_id": receipt_id}),
+                        AuditEvent.after_data.contains({"receipt_id": receipt_id}))))
     rows = db.session.execute(select(AuditEvent, User.name).outerjoin(User, User.id == AuditEvent.actor_user_id)
         .where(condition).order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
         .offset((page - 1) * per_page).limit(per_page)).all()
