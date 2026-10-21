@@ -73,6 +73,6 @@ def create_product(*, actor_user_id, sku, name, unit):
 
 def list_products(*, page, per_page):
     rows = db.session.execute(select(Product.id, Product.sku, Product.name, Product.unit, Product.is_active)
-                              .order_by(Product.id).offset((page - 1) * per_page).limit(per_page))
+                              .order_by(Product.is_active.desc(), Product.id).offset((page - 1) * per_page).limit(per_page))
     return {"products": [dict(row._mapping) for row in rows], "page": page, "per_page": per_page,
             "total": db.session.scalar(select(func.count()).select_from(Product))}

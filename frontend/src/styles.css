@@ -67,6 +67,12 @@
 .document-lines-table td[rowspan] { vertical-align: top; }
 .invoice-cancellation { margin-top: 18px; padding: 18px; border: 1px solid var(--line); border-radius: 8px; }
 .invoice-cancellation h3 { margin-bottom: 10px; font-size: 14px; }
+.selected-order-summary { margin: 18px 0; padding: 18px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; line-height: 1.9; overflow-wrap: anywhere; }
+.selected-order-summary h3 { font-size: 14px; }
+.selected-order-summary p { color: var(--muted); }
+.selected-order-summary ul { margin: 10px 0 0; padding-left: 18px; }
+.receipt-history-list .history-operation-lines { margin-top: 10px; }
+.history-operation-lines ul { list-style: none; padding-left: 12px; }
 .invoice-cancellation .form-field { margin-top: 16px; }
 .document-lines-table tbody + tbody tr:first-child td { border-top: 1px solid var(--line); }
 .document-lines-table .document-description { min-width: 150px; max-width: 260px; white-space: normal; overflow-wrap: anywhere; line-height: 1.6; }

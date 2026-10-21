@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal, ROUND_HALF_UP, localcontext
 import re
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 
 from app.extensions import db
 from app.models import Invoice, InvoiceAllocation, InvoiceIssue, InvoiceItem, PurchaseOrder, PurchaseOrderItem, Role, Supplier, User
@@ -315,7 +315,9 @@ def create_invoice(*, actor_user_id, supplier_id, series, number, invoice_date, 
 
 
 def list_invoices(*, page, per_page):
-    invoices = db.session.scalars(select(Invoice).order_by(Invoice.id.desc()).offset((page - 1) * per_page).limit(per_page)).all()
+    priority = case({"BLOCKED": 0, "DRAFT": 1, "VERIFIED": 2, "APPROVED": 3, "PAID": 4, "CANCELLED": 5}, value=Invoice.status, else_=6)
+    invoices = db.session.scalars(select(Invoice).order_by(priority, Invoice.due_date, Invoice.id)
+        .offset((page - 1) * per_page).limit(per_page)).all()
     suppliers = dict(db.session.execute(select(Supplier.id, Supplier.name)
         .where(Supplier.id.in_({invoice.supplier_id for invoice in invoices}))).all())
     orders = dict(db.session.execute(select(PurchaseOrderItem.id, PurchaseOrder.number)

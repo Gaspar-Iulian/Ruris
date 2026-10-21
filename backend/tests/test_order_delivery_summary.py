@@ -55,12 +55,15 @@ def test_delivery_summary_requires_all_lines_and_keeps_pagination(session, setup
         }])).json["receipt"]
         assert client.post(f"/api/receipts/{receipt['id']}/confirm", headers=headers,
                            json=confirm_payload(receipt, line["quantity"], "0", "0")).status_code == 200
-        page = client.get("/api/purchase-orders?page=2&per_page=1").json
+        pages = [client.get(f"/api/purchase-orders?page={number}&per_page=1").json for number in (1, 2)]
+        page = next(page for page in pages if page["orders"][0]["id"] == order["id"])
+        assert len({page["orders"][0]["id"] for page in pages}) == 2
         assert page["total"] == 2
         assert len(page["orders"]) == 1
         assert page["orders"][0]["id"] == order["id"]
         assert page["orders"][0]["delivery_status"] == expected
-        assert client.get("/api/purchase-orders?page=1&per_page=1").json["orders"][0]["delivery_status"] == "NOT_RECEIVED"
+        other = next(page["orders"][0] for page in pages if page["orders"][0]["id"] != order["id"])
+        assert other["delivery_status"] == "NOT_RECEIVED"
     assert client.get("/api/purchase-orders?page=3&per_page=1").json["orders"] == []
 
 
@@ -75,7 +78,9 @@ def test_delivery_summary_ignores_rejected_and_pending_goods(session, setup):
 def test_delivery_summary_is_not_applicable_to_drafts(session, setup):
     order = create_order(actor_user_id=setup["buyer"], supplier_id=setup["supplier"], currency="RON", items=[])
     client, _ = authorize(setup["buyer"])
-    assert client.get("/api/purchase-orders?page=2&per_page=1").json["orders"][0]["delivery_status"] is None
+    first = client.get("/api/purchase-orders?page=1&per_page=1").json["orders"][0]
+    assert first["id"] == order["id"]
+    assert first["delivery_status"] is None
     assert client.get(f"/api/purchase-orders/{order['id']}/delivery").json["delivery"]["delivery_status"] is None
 
 
@@ -117,11 +122,11 @@ def test_order_list_groups_all_lines_only_for_current_page_and_keeps_snapshots(s
         "product_id": setup["product"], "quantity": amount, "unit_price": price, "vat_rate": "0", "expected_date": "2026-11-10",
     } for amount, price in [("1.125", "3.1234"), ("2.500", "4.5000")]])
     client, _ = authorize(setup["buyer"])
-    first = client.get("/api/purchase-orders?page=1&per_page=1").json
+    first = client.get("/api/purchase-orders?page=2&per_page=1").json
     assert first["total"] == 2
     assert first["orders"][0]["supplier_name"] == "Furnizor redenumit"
     assert first["orders"][0]["items"][0]["description"] == "Produs comandat"
-    following = client.get("/api/purchase-orders?page=2&per_page=1").json["orders"]
+    following = client.get("/api/purchase-orders?page=1&per_page=1").json["orders"]
     assert len(following) == 1
     assert following[0]["id"] == second["id"]
     assert [item["line_number"] for item in following[0]["items"]] == [1, 2]

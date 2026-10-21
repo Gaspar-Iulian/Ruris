@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { orderOptionLabel, SelectedOrderSummary } from './OrderSelection.jsx';
 import { ArrowLeft, CircleAlert, LoaderCircle, Plus, Save, Trash2 } from 'lucide-react';
 import { api } from './api.js';
 import { quantityText } from './receiptQuantities.js';
@@ -148,10 +149,10 @@ export default function InvoiceForm({ onExpired, onCancel, onCreated, initialInv
     <fieldset className="order-fields" disabled={saving || uncertain || noCatalog}>
       {!editing && <section className="panel order-header invoice-source"><h2>Sursa facturii</h2><div className="invoice-header-grid">
         <div className="form-field"><label htmlFor="invoice-mode">Pornire factură</label><select id="invoice-mode" value={mode} onChange={(event) => changeMode(event.target.value)}><option value="order">Din comandă</option><option value="manual">Introducere manuală</option></select></div>
-        {mode === 'order' && <div className="form-field"><label htmlFor="invoice-order">Comandă</label><select id="invoice-order" required value={orderId} onChange={(event) => setOrderId(event.target.value)}><option value="">Selectează comanda</option>{choices.orders.map((order) => <option key={order.id} value={order.id}>{order.number}</option>)}</select></div>}
+        {mode === 'order' && <div className="form-field"><label htmlFor="invoice-order">Comandă</label><select id="invoice-order" required value={orderId} onChange={(event) => setOrderId(event.target.value)}><option value="">Selectează comanda</option>{choices.orders.map((order) => <option key={order.id} value={order.id}>{orderOptionLabel(order)}</option>)}</select></div>}
       </div>{mode === 'order' && !choices.orders.length && <div className="notice" role="status">Nu există comenzi confirmate. Poți folosi introducerea manuală.</div>}
       {mode === 'order' && orderId && (source?.error ? <div className="catalog-error"><p role="alert">{source.error}</p><button type="button" className="button button-secondary" onClick={() => setSourceAttempt((value) => value + 1)}>Reîncarcă comanda</button></div> : needsOrder ? <p className="order-empty" role="status">Se încarcă pozițiile…</p> : null)}
-      {mode === 'order' && source?.id === orderId && source.order && <ExistingOrderInvoices order={source.order} />}
+      {mode === 'order' && source?.id === orderId && source.order && <><SelectedOrderSummary order={source.order} choice={choices.orders.find((order) => String(order.id) === orderId)} financial /><ExistingOrderInvoices order={source.order} /></>}
       </section>}
       <section className="panel order-header"><h2>Detalii factură</h2><div className="invoice-header-grid">
         <div className="form-field"><label htmlFor="invoice-supplier">Furnizor</label><select id="invoice-supplier" required disabled={mode === 'order'} value={supplierId} onChange={(event) => setSupplierId(event.target.value)}><option value="">Selectează furnizorul</option>{choices.suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select></div>

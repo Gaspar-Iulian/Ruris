@@ -81,6 +81,6 @@ def list_suppliers(*, role, page, per_page):
     fields = [Supplier.id, Supplier.name, Supplier.is_active]
     if role in (Role.ACHIZITII, Role.CONTABILITATE):
         fields.extend([Supplier.tax_country, Supplier.tax_id, Supplier.email])
-    rows = db.session.execute(select(*fields).order_by(Supplier.id).offset((page - 1) * per_page).limit(per_page))
+    rows = db.session.execute(select(*fields).order_by(Supplier.is_active.desc(), Supplier.id).offset((page - 1) * per_page).limit(per_page))
     return {"suppliers": [dict(row._mapping) for row in rows], "page": page, "per_page": per_page,
             "total": db.session.scalar(select(func.count()).select_from(Supplier))}

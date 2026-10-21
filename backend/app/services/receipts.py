@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import re
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import raiseload
 
 from app.extensions import db
@@ -304,7 +304,12 @@ def list_receipts(*, page, per_page, role=Role.DEPOZIT, pending_only=False):
         conditions.extend([Receipt.status == "CONFIRMED", Receipt.confirmed_at.is_not(None), Receipt.confirmed_by_id.is_not(None),
                            select(ReceiptItem.id).where(ReceiptItem.receipt_id == Receipt.id,
                                                         ReceiptItem.origin_item_id.is_(None), ReceiptItem.pending_quantity > 0).exists()])
-    receipts = db.session.scalars(select(Receipt).where(*conditions).options(raiseload(Receipt.items)).order_by(Receipt.id)
+    pending_line = select(ReceiptItem.id).where(ReceiptItem.receipt_id == Receipt.id,
+        ReceiptItem.origin_item_id.is_(None), ReceiptItem.pending_quantity > 0)
+    has_pending = (Receipt.status == "CONFIRMED") & pending_line.exists()
+    priority = case((has_pending, 0), (Receipt.status == "DRAFT", 1),
+                    (Receipt.status == "CONFIRMED", 2), else_=3)
+    receipts = db.session.scalars(select(Receipt).where(*conditions).options(raiseload(Receipt.items)).order_by(priority, Receipt.received_at, Receipt.id)
                                   .offset((page - 1) * per_page).limit(per_page)).all()
     pending = dict(db.session.execute(select(ReceiptItem.receipt_id, func.count())
         .where(ReceiptItem.receipt_id.in_([receipt.id for receipt in receipts]), ReceiptItem.origin_item_id.is_(None), ReceiptItem.pending_quantity > 0)

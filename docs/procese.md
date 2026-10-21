@@ -132,3 +132,24 @@ exact o dată. SENT înseamnă acceptat de serverul SMTP, nu confirmat citit.
 „Clarificări” arată problemele curente. „Notificări” este istoricul personal al
 destinatarului, filtrat și după rolul său actual; nu este inbox comun de echipă.
 Rezolvarea problemei o elimină din sumarele viitoare, fără ștergerea mesajelor trimise.
+
+## Ordinea documentelor în portal
+
+Sortarea se aplică în PostgreSQL înainte de paginare, cu identificatorul ca
+departajare stabilă. Permisiunile și câmpurile vizibile rămân specifice rolului.
+
+| Listă | Ordine implicită |
+| --- | --- |
+| Facturi | Blocate → ciorne → verificate → aprobate → plătite → anulate; scadența cea mai apropiată în fiecare categorie |
+| Recepții | Confirmate cu marfă în așteptare → ciorne, vizibile numai Depozitului → confirmate rezolvate → anulate; data sosirii în fiecare categorie |
+| Comenzi | Confirmate întârziate → ciorne, vizibile numai Achizițiilor → livrate parțial → nerecepționate → livrate complet → închise → anulate; cel mai apropiat termen restant în fiecare categorie |
+| Catalog și conturi | Înregistrări active înaintea celor inactive |
+
+Întârzierile păstrează ordinea după cel mai vechi termen. Istoricul și jurnalul
+notificărilor rămân cronologice, cu cele mai recente operații primele.
+
+Istoricul recepției din portal grupează antetul și pozițiile din aceeași operație;
+motivul apare o singură dată, iar pozițiile se pot extinde. Paginarea numără
+operații întregi. Auditul detaliat este păstrat integral; API-ul fără `grouped=1`
+continuă să ofere evenimentele individuale. Gruparea folosește momentul complet,
+autorul și motivul, fără trunchierea timestampului la secunda afișată.

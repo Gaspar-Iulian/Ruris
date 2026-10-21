@@ -1,5 +1,25 @@
 import { test, expect } from '@playwright/test';
 
+test('receipt history displays one operation with its reason once and expandable lines', async ({ page }) => {
+  await portal(page, 'CONTABILITATE');
+  let grouped;
+  await page.route('**/api/receipts/2/history?*', (route) => {
+    grouped = new URL(route.request().url()).searchParams.get('grouped');
+    return route.fulfill({ json: { total: 1, events: [{ id: 10, entity_type: 'receipts', action: 'CONFIRM',
+      actor_name: 'Depozit', created_at: '2026-10-21T15:22:09.123456Z', reason: 'Au sosit doar 27 din 50.',
+      changes: [{ id: 11, entity_type: 'receipt_items', action: 'UPDATE', line_number: 1, order_number: 'CA-6',
+        after: { accepted_quantity: '27.000', rejected_quantity: '0.000', pending_quantity: '0.000', unit: 'BUC' } }] }] } });
+  });
+  await openPending(page);
+  const history = page.getByRole('region', { name: 'Istoric recepție' });
+  await expect(history.getByText('recepție confirmată', { exact: true })).toHaveCount(1);
+  await expect(history.getByText('Au sosit doar 27 din 50.', { exact: true })).toHaveCount(1);
+  await expect(history.locator('.receipt-history-list > li')).toHaveCount(1);
+  await history.getByText('Poziții și modificări', { exact: true }).click();
+  await expect(history).toContainText('acceptat 27 BUC · respins 0 · în așteptare 0 · CA-6');
+  expect(grouped).toBe('1');
+});
+
 async function portal(page, role, { covered = false, holdDecision = false } = {}) {
   const user = { id: 1, name: 'Angajat test', role };
   const item = { id: 11, line_number: 1, product_id: null, purchase_order_item_id: null,

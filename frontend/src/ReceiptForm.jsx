@@ -4,6 +4,7 @@ import { api } from './api.js';
 import { quantityText } from './receiptQuantities.js';
 import { DeliveryQuantityHint } from './ReceiptBalance.jsx';
 import UnorderedReceiptForm from './UnorderedReceiptForm.jsx';
+import { orderOptionLabel, SelectedOrderSummary } from './OrderSelection.jsx';
 
 function localNow() {
   const now = new Date();
@@ -118,10 +119,11 @@ function OrderedReceiptForm({ onExpired, onCancel, onCreated, onBusyChange }) {
     {error && <div className="error-message" role="alert" ref={errorBox} tabIndex={-1}><CircleAlert size={18} />{error}</div>}
     <fieldset className="order-fields" disabled={saving || uncertain || !choices.orders.length}>
       <section className="panel order-header"><h2>Detalii recepție</h2><div className="user-form-grid receipt-header-grid">
-        <div className="form-field"><label htmlFor="receipt-order">Comandă</label><select id="receipt-order" required value={orderId} onChange={(event) => setOrderId(event.target.value)}><option value="">Selectează comanda</option>{choices.orders.map((item) => <option key={item.id} value={item.id}>{item.number}</option>)}</select></div>
+        <div className="form-field"><label htmlFor="receipt-order">Comandă</label><select id="receipt-order" required value={orderId} onChange={(event) => setOrderId(event.target.value)}><option value="">Selectează comanda</option>{choices.orders.map((item) => <option key={item.id} value={item.id}>{orderOptionLabel(item)}</option>)}</select></div>
         <div className="form-field"><label htmlFor="receipt-reference">Document de livrare</label><input id="receipt-reference" required maxLength={120} value={reference} onChange={(event) => setReference(event.target.value)} /></div>
         <div className="form-field"><label htmlFor="receipt-date">Data și ora recepției</label><input id="receipt-date" type="datetime-local" required value={receivedAt} onChange={(event) => setReceivedAt(event.target.value)} /><small className="field-hint">Ora locală a browserului.</small></div>
       </div></section>
+      {order && <SelectedOrderSummary order={order} choice={choices.orders.find((item) => String(item.id) === orderId)} />}
       {orderId && <section className="panel order-lines"><div className="panel-heading"><h2>Produse sosite</h2>{choices.orders.find((item) => String(item.id) === orderId)?.supplier_name && <p>{choices.orders.find((item) => String(item.id) === orderId).supplier_name}</p>}</div>
         {source?.orderId === orderId && source.error ? <div className="catalog-error"><p role="alert">{source.error}</p><button type="button" className="button button-secondary" onClick={() => setSourceAttempt((value) => value + 1)}>Reîncarcă produsele</button></div> : !order ? <div className="feedback" role="status">Se încarcă produsele…</div> : order.status !== 'CONFIRMED' ? <p className="order-empty" role="alert">Comanda nu mai este deschisă pentru recepție.</p> : <>
           <p className="receipt-hint">Completează doar cantitățile sosite. Ciorna nu modifică stocul.</p>

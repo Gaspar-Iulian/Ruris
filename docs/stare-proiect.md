@@ -504,6 +504,23 @@ următor, împreună cu README-ul compact și documentația de livrare.
 Rezultatele de mai sus sunt verificarea actuală din 21 octombrie 2026. Numerele
 mai mici din secțiunile precedente descriu etapele istorice și nu se însumează.
 
+### Ajustări după testarea manuală
+
+- Istoricul recepțiilor grupează operația și pozițiile ei, cu motiv afișat o
+  singură dată și detalii extensibile. Paginarea numără operații întregi;
+  evenimentele originale de audit rămân intacte.
+- La factură și recepție, selectorul comenzii arată furnizorul și produsul,
+  cantitatea și livrarea. Rezumatul selecției afișează cantități și termene;
+  prețurile sunt afișate numai în formularul Contabilității.
+- Listele de comenzi, recepții și facturi sunt prioritizate în baza de date
+  înainte de paginare; catalogul și conturile pun înregistrările active primele.
+  Ordinea exactă este în [procese.md](procese.md).
+- Au trecut 449 de teste backend relevante, 110 teste UI existente și trei
+  verificări noi pentru istoric și detaliile comenzilor, inclusiv pe mobil.
+  Două fluxuri cu API real au trecut: 77 + 23 până la plată și anularea unui
+  duplicat cu păstrarea fișierului. Compilarea frontendului și imaginile Docker
+  au trecut. Aceste selecții includ teste comune și nu se adună cu suita anterioară.
+
 ## 9. Pachetele următoare, în ordinea propusă
 
 1. **Acceptanța manuală finală:** parcurgerea ghidului de demonstrație cu utilizatorul,

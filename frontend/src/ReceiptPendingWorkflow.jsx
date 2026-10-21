@@ -135,7 +135,7 @@ function ReceiptHistory({ id, version, onExpired }) {
   useEffect(() => {
     const controller = new AbortController();
     setState({ loading: true });
-    api(`/receipts/${id}/history?page=${page}&per_page=10`, { signal: controller.signal }).then((data) => {
+    api(`/receipts/${id}/history?page=${page}&per_page=10&grouped=1`, { signal: controller.signal }).then((data) => {
       if (!controller.signal.aborted) setState({ data });
     }).catch((failure) => {
       if (controller.signal.aborted || failure.name === 'AbortError') return;
@@ -151,13 +151,18 @@ function ReceiptHistory({ id, version, onExpired }) {
     if (event.action === 'ACCEPT' || event.action === 'REJECT') {
       return `${prefix}${event.action === 'ACCEPT' ? 'acceptate' : 'respinse'} ${quantityDifference(event.before.pending_quantity, event.after.pending_quantity)} ${event.after.unit}${event.order_number ? ` · ${event.order_number}` : ''}`;
     }
+    if (event.entity_type === 'receipt_items' && event.action === 'UPDATE' && event.after?.accepted_quantity != null) {
+      return `${prefix}acceptat ${quantityText(event.after.accepted_quantity)} ${event.after.unit} · respins ${quantityText(event.after.rejected_quantity)} · în așteptare ${quantityText(event.after.pending_quantity)}${event.order_number ? ` · ${event.order_number}` : ''}`;
+    }
     const labels = { CLARIFY: 'comandă asociată', CONFIRM: 'recepție confirmată', UPDATE: 'date actualizate', CREATE: event.is_acceptance ? 'acceptare înregistrată separat' : event.line_number ? 'sosire înregistrată' : 'recepție creată' };
     return prefix + (labels[event.action] || 'operație înregistrată') + (event.order_number ? ` · ${event.order_number}` : '');
   }
 
   return <section className="receipt-history" aria-label="Istoric recepție"><h3>Istoric</h3>
     {state.loading ? <p role="status">Se încarcă istoricul…</p> : state.error ? <div className="catalog-error"><p role="alert">{state.error}</p><button type="button" className="button button-secondary" onClick={() => setAttempt((value) => value + 1)}>Reîncarcă istoricul</button></div> : <>
-      <ol className="receipt-history-list">{(state.data?.events || []).map((event) => <li key={event.id}><strong>{eventText(event)}</strong><p>{event.actor_name} · {new Intl.DateTimeFormat('ro-RO', { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(event.created_at))}</p>{event.reason && <p>{event.reason}</p>}</li>)}</ol>
+      <ol className="receipt-history-list">{(state.data?.events || []).map((event) => <li key={event.id}><strong>{eventText(event)}</strong><p>{event.actor_name} · {new Intl.DateTimeFormat('ro-RO', { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(event.created_at))}</p>{event.reason && <p>{event.reason}</p>}
+        {event.changes?.length > 0 && <details className="history-operation-lines"><summary>Poziții și modificări</summary><ul>{event.changes.map((change) => <li key={change.id}>{eventText(change)}</li>)}</ul></details>}
+      </li>)}</ol>
       {state.data?.total > 10 && <div className="pagination"><span>Pagina {page} din {Math.ceil(state.data.total / 10)}</span><div><button type="button" className="button button-secondary" disabled={page === 1} onClick={() => setPage((value) => value - 1)}>Mai recente</button><button type="button" className="button button-secondary" disabled={page * 10 >= state.data.total} onClick={() => setPage((value) => value + 1)}>Mai vechi</button></div></div>}
     </>}
   </section>;

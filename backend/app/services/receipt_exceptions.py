@@ -212,7 +212,7 @@ def resolve_receipt_item(*, actor_user_id, receipt_id, item_id, version, reason,
         raise
 
 
-def receipt_history(receipt_id, *, role, page, per_page):
+def receipt_history(receipt_id, *, role, page, per_page, grouped=False):
     receipt = db.session.scalar(select(Receipt).where(Receipt.id == receipt_id, *visible_receipts(role)))
     if receipt is None:
         raise ReceiptNotFoundError("Receptia nu a fost gasita.")
@@ -222,9 +222,20 @@ def receipt_history(receipt_id, *, role, page, per_page):
                     and_(AuditEvent.entity_type == "attachments", or_(
                         AuditEvent.before_data.contains({"receipt_id": receipt_id}),
                         AuditEvent.after_data.contains({"receipt_id": receipt_id}))))
-    rows = db.session.execute(select(AuditEvent, User.name).outerjoin(User, User.id == AuditEvent.actor_user_id)
-        .where(condition).order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
-        .offset((page - 1) * per_page).limit(per_page)).all()
+    query = select(AuditEvent, User.name).outerjoin(User, User.id == AuditEvent.actor_user_id).where(condition)
+    if grouped:
+        # Audit timestamps retain transaction precision; never group by displayed seconds.
+        columns = (AuditEvent.created_at, AuditEvent.actor_user_id, AuditEvent.actor_process, AuditEvent.reason)
+        operations = select(*columns, func.max(AuditEvent.id).label("last_id")).where(condition).group_by(*columns).subquery()
+        total = db.session.scalar(select(func.count()).select_from(operations))
+        selected = db.session.execute(select(operations).order_by(operations.c.created_at.desc(), operations.c.last_id.desc())
+            .offset((page - 1) * per_page).limit(per_page)).all()
+        matches = [and_(*(column.is_not_distinct_from(value) for column, value in zip(columns, row[:4]))) for row in selected]
+        query = query.where(or_(*matches) if matches else False)
+    else:
+        total = db.session.scalar(select(func.count()).select_from(AuditEvent).where(condition))
+        query = query.offset((page - 1) * per_page).limit(per_page)
+    rows = db.session.execute(query.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())).all()
     source_ids = {source_id for event, _ in rows for snapshot in (event.before_data, event.after_data)
                   if snapshot for source_id in (snapshot.get("pending_order_item_id"), snapshot.get("purchase_order_item_id"))
                   if source_id is not None}
@@ -244,5 +255,15 @@ def receipt_history(receipt_id, *, role, page, per_page):
                        "order_number": source.number if source else None, "product_name": source.name if source else None,
                        "created_at": event.created_at.isoformat(),
                        "reason": event.reason, "before": event.before_data, "after": event.after_data})
-    return {"events": events, "total": db.session.scalar(select(func.count()).select_from(AuditEvent).where(condition)),
+    if grouped:
+        groups = {}
+        for event in events:
+            key = (event["created_at"], event["actor_user_id"], event["actor_name"], event["reason"])
+            groups.setdefault(key, []).append(event)
+        events = []
+        for children in groups.values():
+            representative = next((event for event in children if event["action"] in ("ACCEPT", "REJECT", "CLARIFY")),
+                next((event for event in children if event["entity_type"] == "receipts"), children[0]))
+            events.append({**representative, "changes": [event for event in children if event["entity_type"] == "receipt_items"]})
+    return {"events": events, "total": total,
             "page": page, "per_page": per_page}

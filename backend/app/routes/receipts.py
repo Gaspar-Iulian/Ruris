@@ -67,7 +67,7 @@ def resolve(receipt_id, item_id):
 def history(receipt_id):
     if not 1 <= receipt_id <= 9223372036854775807:
         return jsonify(message="Receptia nu a fost gasita."), 404
-    pagination = receipt_pagination()
+    pagination = receipt_pagination(allow_grouped=True)
     if isinstance(pagination, tuple):
         return pagination
     try:
@@ -182,8 +182,9 @@ def detail(receipt_id):
         return jsonify(message="Receptia nu este disponibila momentan."), 503
 
 
-def receipt_pagination():
-    if set(request.args) - {"page", "per_page"} or any(len(request.args.getlist(key)) != 1 for key in request.args):
+def receipt_pagination(*, allow_grouped=False):
+    allowed = {"page", "per_page", "grouped"} if allow_grouped else {"page", "per_page"}
+    if set(request.args) - allowed or any(len(request.args.getlist(key)) != 1 for key in request.args):
         return jsonify(message="Parametrii permisi sunt page si per_page, o singura data fiecare."), 400
     try:
         page = int(request.args.get("page", "1"))
@@ -192,7 +193,12 @@ def receipt_pagination():
         return jsonify(message="Paginarea trebuie sa contina numere intregi."), 400
     if not 1 <= page <= 1000000 or not 1 <= per_page <= 100:
         return jsonify(message="Paginare invalida: page 1-1000000, per_page 1-100."), 400
-    return {"page": page, "per_page": per_page}
+    result = {"page": page, "per_page": per_page}
+    if allow_grouped:
+        if request.args.get("grouped", "0") not in ("0", "1"):
+            return jsonify(message="grouped trebuie sa fie 0 sau 1."), 400
+        result["grouped"] = request.args.get("grouped") == "1"
+    return result
 
 
 @receipts_bp.get("")

@@ -84,7 +84,7 @@ test.describe('real Flask and PostgreSQL flows', () => {
     for (const amount of quantities) {
       await navigate(page, 'Recepții');
       await page.getByRole('button', { name: 'Recepție nouă', exact: true }).click();
-      await page.getByLabel('Comandă', { exact: true }).selectOption({ label: order.number });
+      await page.getByLabel('Comandă', { exact: true }).selectOption(String(order.id));
       await page.getByLabel('Document de livrare', { exact: true }).fill(`AV-${order.id}-${amount}`);
       await page.getByLabel('Cantitate sosită 1', { exact: true }).fill(String(amount));
       const saved = page.waitForResponse((response) => response.url().endsWith('/api/receipts') && response.request().method() === 'POST');
@@ -208,7 +208,7 @@ test.describe('real Flask and PostgreSQL flows', () => {
   async function invoice(page, order, number, price, amount, date = '2026-10-21') {
     await page.getByRole('button', { name: 'Factură nouă', exact: true }).click();
     const sourceLoaded = page.waitForResponse((response) => response.url().includes(`/purchase-orders/${order.id}/invoicing`));
-    await page.getByLabel('Comandă', { exact: true }).selectOption({ label: order.number });
+    await page.getByLabel('Comandă', { exact: true }).selectOption(String(order.id));
     const source = (await (await sourceLoaded).json()).order;
     await expect(page.getByLabel('Cantitate 1', { exact: true })).toHaveValue(quantityText(source.items[0].remaining_to_invoice, '.'));
     if (source.invoice_documents.length) await expect(page.getByRole('region', { name: 'Facturi existente pentru comandă' })).toBeVisible();
@@ -494,7 +494,7 @@ test.describe('real Flask and PostgreSQL flows', () => {
     const order = await setupOrder(page, 'SURPLUS', 10);
     await login(page, 'DEPOZIT');
     await page.getByRole('button', { name: 'Recepție nouă', exact: true }).click();
-    await page.getByLabel('Comandă', { exact: true }).selectOption({ label: order.number });
+    await page.getByLabel('Comandă', { exact: true }).selectOption(String(order.id));
     await page.getByLabel('Document de livrare', { exact: true }).fill('AV-SURPLUS');
     await page.getByLabel('Cantitate sosită 1', { exact: true }).fill('14');
     const saved = page.waitForResponse((response) => response.url().endsWith('/api/receipts') && response.request().method() === 'POST');

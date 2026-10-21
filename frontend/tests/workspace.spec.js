@@ -1,5 +1,37 @@
 import { test, expect } from '@playwright/test';
 
+test('receipt order choices show supplier and product and the selected summary hides prices', async ({ page }) => {
+  await mockApi(page, 'DEPOZIT');
+  await login(page);
+  await page.getByRole('button', { name: 'Recepție nouă', exact: true }).click();
+  const select = page.getByLabel('Comandă', { exact: true });
+  await expect(select.locator('option[value="1"]')).toContainText('CA-1024 — Furnizor test — Filtru de aer');
+  await expect(select.locator('option[value="1"]')).toContainText('12 BUC');
+  await select.selectOption('1');
+  const summary = page.getByRole('region', { name: 'Comanda selectată' });
+  await expect(summary).toContainText('Furnizor test');
+  await expect(summary).toContainText('Livrată parțial');
+  await expect(summary).toContainText('Filtru de aer · 100 BUC · Acceptat: 40 · Rest: 60');
+  await expect(summary).not.toContainText('Preț');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('invoice order summary exposes commercial terms before saving', async ({ page }) => {
+  await mockApi(page, 'CONTABILITATE');
+  await login(page);
+  await page.getByRole('button', { name: 'Factură nouă', exact: true }).click();
+  const select = page.getByLabel('Comandă', { exact: true });
+  await expect(select.locator('option[value="1"]')).toContainText('Furnizor test — Filtru de aer');
+  await select.selectOption('1');
+  const summary = page.getByRole('region', { name: 'Comanda selectată' });
+  await expect(summary).toContainText('100 BUC');
+  await expect(summary).toContainText('Acceptat: 77');
+  await expect(summary).toContainText('Preț: 2,0000 RON/BUC');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
 async function mockApi(page, role = 'ACHIZITII', { emptyCatalog = false, draftOrder = false, draftReceipt = false } = {}) {
   let loggedIn = false;
   let expired = false;

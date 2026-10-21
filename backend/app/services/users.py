@@ -62,7 +62,7 @@ def public_user_data(user):
 def list_users(*, page, per_page):
     rows = db.session.execute(
         select(User.id, User.name, User.email, User.role, User.is_active)
-        .order_by(User.id).offset((page - 1) * per_page).limit(per_page)
+        .order_by(User.is_active.desc(), User.id).offset((page - 1) * per_page).limit(per_page)
     ).all()
     total = db.session.scalar(select(func.count()).select_from(User))
     return {

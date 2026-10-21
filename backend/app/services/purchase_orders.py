@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 import re
 
-from sqlalchemy import Date, func, select
+from sqlalchemy import Date, case, func, select
 
 from app.extensions import db
 from app.models import Product, PurchaseOrder, PurchaseOrderItem, Role, Supplier, User
@@ -426,9 +426,26 @@ def list_overdue_items(*, page, per_page, role=Role.ACHIZITII):
 
 def list_orders(*, page, per_page, role=Role.ACHIZITII):
     conditions = visible_orders(role)
+    accepted_totals = accepted_quantities_subquery()
+    accepted = func.coalesce(accepted_totals.c.accepted_quantity, 0)
+    remaining = PurchaseOrderItem.quantity > accepted
+    progress = select(PurchaseOrderItem.purchase_order_id.label("order_id"),
+        func.count().filter(remaining).label("remaining_lines"),
+        func.count().filter(accepted > 0).label("received_lines"),
+        func.min(PurchaseOrderItem.expected_date).filter(remaining).label("next_deadline"))\
+        .outerjoin(accepted_totals, accepted_totals.c.order_item_id == PurchaseOrderItem.id)\
+        .group_by(PurchaseOrderItem.purchase_order_id).subquery()
+    open_order = PurchaseOrder.status == "CONFIRMED"
+    priority = case((open_order & (progress.c.next_deadline < bucharest_date()), 0),
+        (PurchaseOrder.status == "DRAFT", 1),
+        (open_order & (progress.c.remaining_lines > 0) & (progress.c.received_lines > 0), 2),
+        (open_order & (progress.c.remaining_lines > 0), 3),
+        (PurchaseOrder.status == "CONFIRMED", 4), (PurchaseOrder.status == "CLOSED", 5), else_=6)
     rows = db.session.execute(select(*header_columns(role), Supplier.name.label("supplier_name"))
-                              .join(Supplier, Supplier.id == PurchaseOrder.supplier_id).where(*conditions)
-                              .order_by(PurchaseOrder.id).offset((page - 1) * per_page).limit(per_page))
+                              .join(Supplier, Supplier.id == PurchaseOrder.supplier_id)
+                              .outerjoin(progress, progress.c.order_id == PurchaseOrder.id).where(*conditions)
+                              .order_by(priority, progress.c.next_deadline.asc().nulls_last(), PurchaseOrder.id)
+                              .offset((page - 1) * per_page).limit(per_page))
     orders = [read_header(row) for row in rows]
     by_id = {order["id"]: order for order in orders}
     for order in orders:
