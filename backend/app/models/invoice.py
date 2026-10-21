@@ -12,7 +12,10 @@ class Invoice(db.Model):
     __table_args__ = (
         db.UniqueConstraint("supplier_id", "series", "number", name="uq_invoices_supplier_reference"),
         CheckConstraint("currency IN ('RON', 'EUR')", name="ck_invoices_currency"),
-        CheckConstraint("status IN ('DRAFT', 'BLOCKED', 'VERIFIED', 'APPROVED', 'PAID')", name="ck_invoices_status"),
+        CheckConstraint("status IN ('DRAFT', 'BLOCKED', 'VERIFIED', 'APPROVED', 'PAID', 'CANCELLED')", name="ck_invoices_status"),
+        CheckConstraint("(status = 'CANCELLED' AND cancelled_by_id IS NOT NULL AND cancelled_at IS NOT NULL "
+                        "AND cancellation_reason IS NOT NULL AND length(btrim(cancellation_reason)) BETWEEN 1 AND 1000) OR "
+                        "(status <> 'CANCELLED' AND cancelled_by_id IS NULL AND cancelled_at IS NULL AND cancellation_reason IS NULL)", name="ck_invoices_cancellation"),
         CheckConstraint("(status IN ('APPROVED', 'PAID') AND approved_by_id IS NOT NULL AND approved_at IS NOT NULL AND total_ron IS NOT NULL) OR (status NOT IN ('APPROVED', 'PAID') AND approved_by_id IS NULL AND approved_at IS NULL)", name="ck_invoices_approval"),
         CheckConstraint("(status = 'PAID' AND paid_at IS NOT NULL AND paid_by_id IS NOT NULL AND payment_reference IS NOT NULL AND length(btrim(payment_reference)) BETWEEN 1 AND 120 AND paid_at >= approved_at) OR (status <> 'PAID' AND paid_at IS NULL AND paid_by_id IS NULL AND payment_reference IS NULL)", name="ck_invoices_payment"),
         CheckConstraint("due_date >= invoice_date", name="ck_invoices_dates"),
@@ -48,6 +51,9 @@ class Invoice(db.Model):
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     paid_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT", name="fk_invoices_paid_by"))
     payment_reference: Mapped[str | None] = mapped_column(String(120))
+    cancelled_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT", name="fk_invoices_cancelled_by"))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancellation_reason: Mapped[str | None] = mapped_column(String(1000))
     version: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

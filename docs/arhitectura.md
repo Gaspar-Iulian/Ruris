@@ -19,22 +19,21 @@ Flask verifica utilizatorul, permisiunile si regulile aplicatiei.
 Doar backendul acceseaza baza de date.
 
 Backendul este o singura aplicatie, organizata pe module.
-SQLAlchemy si migrarile vor gestiona tabelele si modificarile lor.
+SQLAlchemy și migrările Alembic gestionează tabelele și modificările lor.
 
 Regulile functionale sunt descrise in [procese.md](procese.md).
-Aceste reguli vor ghida modelele, endpointurile si testele.
-Relatiile si campurile propuse sunt descrise in [schema-date.md](schema-date.md).
-Accesul implementat si matricea viitoare sunt descrise in [permisiuni.md](permisiuni.md).
+Relațiile implementate sunt descrise în [schema-date.md](schema-date.md).
+Accesul implementat este descris în [permisiuni.md](permisiuni.md).
 
 ## Organizarea codului
 
 Pastram structura existenta si adaugam fisiere pe masura ce implementam functiile.
 
-| Zona | Exemple de fisiere viitoare | Rol |
+| Zona | Exemple de module | Rol |
 | --- | --- | --- |
 | models | user.py, purchase_order.py, receipt.py, invoice.py | Date, relatii si constrangeri |
-| routes | auth.py, purchases.py, warehouse.py, invoices.py | Validare cereri, acces si raspunsuri |
-| services | purchases.py, receiving.py, matching.py, inventory.py | Reguli si operatii complete |
+| routes | auth.py, purchase_orders.py, receipts.py, invoices.py | Validare cereri, acces si raspunsuri |
+| services | purchase_orders.py, receipts.py, invoice_allocations.py, invoice_cancellation.py | Reguli si operatii complete |
 | services | exchange_rates.py, notifications.py, audit.py | Integrari si trasabilitate |
 | tests | teste pentru fiecare flux | Verificarea comportamentului si accesului |
 
@@ -50,7 +49,7 @@ Fiecare persoana are un cont propriu si un rol.
 | Rol | Responsabilitati |
 | --- | --- |
 | Achizitii | Furnizori, comenzi si urmarirea livrarilor |
-| Depozit | Receptii, retururi si miscari de stoc |
+| Depozit | Recepții și acceptarea/respingerea mărfii |
 | Contabilitate | Facturi, verificari si aprobarea platii |
 | Administrator | Utilizatori si configurari |
 
@@ -78,7 +77,7 @@ Modificarile relevante pastreaza utilizatorul, data si valorile schimbate.
 - Comenzi si pozitii de comanda.
 - Receptii si pozitii de receptie.
 - Facturi, pozitii si alocari la receptii.
-- Miscari de stoc, inclusiv iesiri si retururi.
+- Mișcări de intrare în stoc; ieșirile și retururile sunt extinderi viitoare.
 - Cursuri valutare si jurnal de audit.
 - Notificari si istoricul trimiterilor.
 
@@ -86,17 +85,17 @@ Sumele folosesc Decimal in Python si NUMERIC in PostgreSQL.
 Parolele se pastreaza ca hash bcrypt.
 JWT identifica utilizatorul; backendul verifica drepturile lui.
 
-## Integrari ulterioare
+## Integrări și sarcini periodice
 
-- Cursuri BNR pentru conversia EUR in RON.
+- Cursuri BNR implementate pentru conversia EUR în RON, la data exactă a facturii.
 - SMTP extern pentru emailuri; transportul local de test prin Mailpit este implementat.
 - Celery, Redis si Celery Beat raman o optiune pentru extinderea executiei sarcinilor.
 
 Pentru etapa locala este implementat workerul CLI `run-notification-worker`,
 separat de procesul HTTP. Verifica ora Europe/Bucharest, ruleaza sumarul zilnic
 si respecta next_attempt_at din PostgreSQL pentru reincercari. Nu porneste automat
-din create_app() si nu necesita dependinte suplimentare. In productie va necesita
-un manager de procese sau un container dedicat, pentru a ramane pornit.
+din create_app() și nu necesită dependențe suplimentare. Profilul Docker `app`
+îl rulează într-un container separat, cu repornire automată.
 
 Sarcinile periodice ruleaza separat de cererile utilizatorilor.
 Emailurile au istoric, reincercare la eroare si protectie impotriva duplicatelor.

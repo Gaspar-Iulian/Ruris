@@ -56,6 +56,7 @@ def session():
                         "0022_notification_channels.py",
                         "0023_invoice_declared_totals.py",
                         "0024_document_attachments.py",
+                        "0025_invoice_cancellation.py",
                     ):
                         spec = importlib.util.spec_from_file_location(filename[:-3], migrations / filename)
                         migration = importlib.util.module_from_spec(spec)

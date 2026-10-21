@@ -33,6 +33,7 @@ Există proceduri verificate de backup și restaurare, descrise în [ghidul Dock
 | Facturi | Factură pornită din comandă sau introdusă manual, în RON/EUR. Asociere la recepții, verificare, aprobare și înregistrarea plății sunt operații distincte. |
 | Diferențe și asocieri | Cantitățile lipsă și diferențele de preț, TVA, monedă sau unitate sunt evidențiate. Cantitatea deja asociată unei facturi nu poate fi folosită din nou. |
 | Corectarea facturilor | Schimbarea pozițiilor cere eliberarea asocierilor. Totalurile de pe document se pot corecta separat, cu motiv și versiune, păstrând asocierile. Schimbările invalidează verificarea anterioară. |
+| Anularea facturilor | Numai înainte de aprobare, cu motiv, autor și moment. Eliberează asocierile și închide blocajele; păstrează pozițiile, fișierele și auditul, fără schimbarea stocului. |
 | Totaluri furnizor | Net, TVA și total introduse separat din document și comparate cu sumele calculate. Totalurile lipsă, aritmetica inconsistentă și diferențele de un ban blochează verificarea. |
 | Curs valutar | Curs istoric BNR din data exactă a facturii, preluat automat, cu sursa și conversia păstrate. Lipsa publicării și eșecul preluării au explicații distincte și permit reverificarea. Calculele monetare folosesc Decimal. |
 | Audit | Istoric vizibil pentru comenzi, recepții și facturi, cu autor, moment și schimbări înainte/după. Auditul este atomic și protejat împotriva modificării sau ștergerii. Vizibilitatea respectă rolul și documentul, inclusiv eliminarea câmpurilor financiare și a notelor comerciale din istoricul comenzilor văzut de Depozit. |
@@ -70,7 +71,7 @@ rețea incert cere actualizarea datelor înaintea unei alte operații.
 | Emailuri periodice utilizabile la livrare | Worker pornit în Docker, SMTP configurabil, clarificări pe echipe și jurnal personal; Mailpit real verificat. | Configurarea și validarea unui furnizor SMTP în mediul de livrare, cu datele acelui mediu. Trimiterea externă nu a fost executată în teste. |
 | Curs în ziua facturii | Este folosită strict data facturii; blocajele sunt explicate în portal. Sunt testate fluxul EUR până la plată, reluarea după eșec și reutilizarea cursului salvat. | O regulă alternativă pentru zile fără curs trebuie decisă explicit. Testele browser folosesc XML controlat; conexiunea publică BNR este verificată separat. |
 | Stoc complet | Sunt implementate intrările din recepții acceptate. | Pentru un depozit cu consum și retururi: ieșiri, retururi și ajustări documentate. Până atunci, soldul reflectă numai intrările înregistrate. |
-| Portabilitate pe alt PC | Docker pentru PostgreSQL, Mailpit, migrări și worker; backendul și frontendul pornesc separat. | Containere pentru backend și frontend și verificarea pornirii întregului proiect de la zero. |
+| Portabilitate pe alt PC | Portal complet în Docker, verificat pe volume goale; backup și restaurare în proiect separat, inclusiv fișiere. | Configurarea infrastructurii destinație; datele se mută prin backup, separat de cod. |
 | Livrare în Git | Repository configurat și checkpointuri publicate anterior; există lucrări ulterioare în spațiul local. | Checkpoint final și push numai la cererea utilizatorului, apoi verificarea instrucțiunilor de pornire. |
 
 ### Completări utile, distincte de cerințele explicite
@@ -470,10 +471,43 @@ formular au fost comparate cu valorile calculate de backend la salvare.
 - Portalul principal folosește acum `http://127.0.0.1:8080`. Instrucțiunile sunt
   în [docker.md](docker.md), inclusiv importul documentelor locale și restaurarea.
 
+### Acceptanță, anulare și documentație de livrare
+
+Checkpointul anterior a fost publicat pe `master`: `ef9bf65`, cu mesajul
+`Added Full Docker Setup , Backup Restore , Detailed Tables , Live Totals , Invoice Safeguards , Mail Test Isolation`.
+Pachetul descris aici este ulterior acelui commit și este inclus în checkpointul
+următor, împreună cu README-ul compact și documentația de livrare.
+
+- Migrarea `0025_invoice_cancellation` și fluxul complet de anulare sunt implementate.
+  Facturile DRAFT/BLOCKED/VERIFIED pot fi anulate de Contabilitate, cu motiv și
+  versiune. APPROVED/PAID sunt refuzate. Asocierile se eliberează atomic și nu
+  mai consumă restul comenzii; documentul și referința sa rămân în evidență.
+- Au trecut **1.073 de teste backend**, inclusiv SMTP separat și concurență reală.
+  Aprobarea și anularea simultană au un singur câștigător, cu date coerente.
+- Au trecut **146 de teste UI**, cu un test Docker exclus din execuția obișnuită.
+  Cele **15 fluxuri cu Flask/PostgreSQL reale** au trecut: 14 la prima execuție,
+  iar scenariul rămas la rerulare după corectarea așteptării vechi privind
+  afișarea cantităților fără zerouri inutile. Compilarea frontendului a trecut.
+- Un flux nou a trecut prin Nginx/Gunicorn Docker: anulare, eliberare de cantități,
+  descărcarea PDF-ului și aprobarea facturii corecte.
+- Backupul limitat la schema `public` și fișiere a fost restaurat într-un proiect
+  gol, cu alt utilizator PostgreSQL. Restaurarea păstrează schema `public`
+  precreată, fără să încerce recrearea ei. Au trecut două teste browser pe copia
+  restaurată: stoc/factură plătită/document și factură anulată/motiv/audit/PDF SHA-256.
+- Portalul principal a fost actualizat la migrarea 0025. `flask db check` nu
+  detectează diferențe față de modele. La verificare au rămas 4 conturi, 7 recepții,
+  5 facturi și 2 atașamente valide; nu au fost anulate documentele utilizatorului.
+- README a fost restrâns la pornire, funcții și limite. Regulile, schema datelor,
+  [matricea de acceptanță](acceptanta.md) și [scenariul de interviu](demo-interviu.md)
+  descriu comportamentul actual, separat de extinderile viitoare.
+
+Rezultatele de mai sus sunt verificarea actuală din 21 octombrie 2026. Numerele
+mai mici din secțiunile precedente descriu etapele istorice și nu se însumează.
+
 ## 9. Pachetele următoare, în ordinea propusă
 
-1. **Acceptanță și livrare:** revizuirea scenariilor cerute, documentarea limitărilor
-   asumate și checkpoint Git la cererea utilizatorului. Pachetul Docker este implementat.
+1. **Acceptanța manuală finală:** parcurgerea ghidului de demonstrație cu utilizatorul,
+   apoi checkpoint Git la cerere. Verificările automate și documentația sunt pregătite.
 2. **Evidența completă a stocului, ca extindere:** ieșiri, retururi și ajustări, cu reguli explicite
    pentru efectele asupra recepțiilor și facturilor deja asociate.
 3. **Demonstrație finală:** prezentarea aplicației și a deciziilor tehnice pentru interviu.

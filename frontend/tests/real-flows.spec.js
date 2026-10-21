@@ -356,7 +356,7 @@ test.describe('real Flask and PostgreSQL flows', () => {
     await page.getByLabel('Observații operație', { exact: true }).fill('Control documente browser');
     await page.getByRole('button', { name: 'Asociază și verifică', exact: true }).click();
     await expect(page.getByRole('dialog').locator('.document-meta')).toContainText('Blocată');
-    await expect(page.getByRole('region', { name: 'Blocaje factură' })).toContainText('100.000; alocata 77.000');
+    await expect(page.getByRole('region', { name: 'Blocaje factură' })).toContainText('100; alocata 77.');
     await expect(page.getByRole('button', { name: 'Aprobă factura', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Înregistrează plata', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Închide detaliile' }).click();
@@ -620,6 +620,47 @@ test.describe('real Flask and PostgreSQL flows', () => {
     const history = await (await loaded).json();
     expect(JSON.stringify(history)).not.toMatch(/unit_price|vat_rate|currency/);
     await expect(page.getByRole('region', { name: 'Istoric comandă' })).toContainText('Comandă confirmată');
+  });
+
+  test('cancelling a duplicate releases its goods while retaining evidence and history', async ({ page }) => {
+    const order = await setupOrder(page, 'CANCEL', 5);
+    await receive(page, order, [5]);
+    await login(page, 'CONTABILITATE');
+    const first = await invoice(page, order, 'CANCEL-001');
+    await associate(page);
+    await attach(page, 'duplicat.pdf');
+    await page.getByRole('button', { name: 'Închide detaliile' }).click();
+    const second = await invoice(page, order, 'CANCEL-002');
+    await page.getByRole('button', { name: 'Verifică factura', exact: true }).click();
+    await expect(page.getByRole('dialog').locator('.document-meta')).toContainText('Blocată');
+    await page.getByRole('button', { name: 'Închide detaliile' }).click();
+    await page.getByRole('button', { name: `Detalii factură ${first.number}`, exact: true }).click();
+    await page.getByRole('button', { name: 'Anulează factura', exact: true }).click();
+    await page.getByLabel('Motivul anulării', { exact: true }).fill('Factura introdusa de doua ori');
+    await page.getByRole('button', { name: 'Confirmă anularea', exact: true }).click();
+    await expect(page.getByRole('dialog').locator('.document-meta')).toContainText('Anulată');
+    await expect(page.getByRole('region', { name: 'Asocieri active' })).toHaveCount(0);
+    const panel = page.getByRole('region', { name: 'Documente atașate' });
+    await panel.getByRole('button', { name: 'Documente', exact: true }).click();
+    await expect(panel.getByRole('button', { name: 'Încarcă fișierul', exact: true })).toHaveCount(0);
+    await download(page, 'duplicat.pdf');
+    const history = page.getByRole('region', { name: 'Istoric factură' });
+    await history.getByRole('button', { name: 'Istoric', exact: true }).click();
+    await expect(history).toContainText('Factură anulată');
+    await expect(history).toContainText('Factura introdusa de doua ori');
+    const context = await page.request.get(`/api/purchase-orders/${order.id}/invoicing`);
+    const source = (await context.json()).order;
+    expect(source.items[0].registered_quantity).toBe('5.000');
+    expect(source.items[0].available_quantity).toBe('5.000');
+    expect(source.invoice_documents.find((row) => row.id === first.id).status).toBe('CANCELLED');
+    await page.getByRole('button', { name: 'Închide detaliile' }).click();
+    await page.getByRole('button', { name: `Detalii factură ${second.number}`, exact: true }).click();
+    await associate(page);
+    await page.getByRole('button', { name: 'Verifică factura', exact: true }).click();
+    await expect(page.getByRole('dialog').locator('.document-meta')).toContainText('Verificată');
+    await page.getByRole('button', { name: 'Aprobă factura', exact: true }).click();
+    await expect(page.getByRole('dialog').locator('.document-meta')).toContainText('Aprobată');
+    await expect(page.getByRole('button', { name: 'Anulează factura', exact: true })).toHaveCount(0);
   });
 
   test('two invoices cannot consume the same receipt; releasing makes it available', async ({ page }) => {

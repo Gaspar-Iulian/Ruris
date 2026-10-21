@@ -44,6 +44,25 @@ def endpoint(kind, document_id):
     return f"/api/documents/{kind}/{document_id}/attachments"
 
 
+def test_cancelled_invoice_keeps_attachments_readable_but_immutable(setup, session, storage):
+    saved = upload(setup, setup["invoice"])
+    assert saved.status_code == 201
+    document = saved.json["document"]
+    record = saved.json["attachment"]
+    client, headers = setup["client"], setup["headers"]
+    cancelled = client.post(f'/api/invoices/{document["id"]}/cancel', headers=headers,
+        json={"version": document["version"], "reason": "Duplicat cu document pastrat"})
+    assert cancelled.status_code == 200
+    current = cancelled.json["invoice"]
+    listing = client.get(endpoint("invoices", document["id"])).json
+    assert listing["can_manage"] is False
+    assert client.get(f'/api/attachments/{record["id"]}/download').data == PDF
+    assert upload(setup, current).status_code == 409
+    assert client.post(f'/api/attachments/{record["id"]}/withdraw', headers=headers,
+        json={"version": current["version"], "reason": "Retragere"}).status_code == 409
+    assert check_attachment_storage()["missing_or_corrupted"] == 0
+
+
 def upload(setup, document, *, kind="invoices", role=Role.CONTABILITATE, content=PDF, name="factură.pdf", mime="application/pdf", version=None, key=None, reason="Document primit de la furnizor"):
     client, headers = authorize(setup["users"][role])
     return client.post(endpoint(kind, document["id"]), headers=headers, data={

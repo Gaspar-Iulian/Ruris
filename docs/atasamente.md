@@ -133,9 +133,13 @@ consistentă, oprește scrierile aplicației pe durata capturării ambelor.
 După restaurare, configurează calea și rulează `check-attachments`.
 Simpla clonare a repository-ului nu mută datele sau documentele încărcate.
 
-Backendul și frontendul web pornesc încă separat de Docker. Containerele web,
-volumul de fișiere și demonstrația de backup/restaurare completă sunt următorul
-pachet propus pentru livrarea portabilă.
+Portalul complet rulează acum în Docker, cu fișierele în volumul dedicat.
+[Ghidul Docker](docker.md) descrie backupul, restaurarea și importul fișierelor
+dintr-o instalare locală anterioară.
+
+O factură anulată păstrează toate fișierele existente pentru consultare și
+descărcare. Încărcarea și retragerea fișierelor nu mai sunt permise pe CANCELLED,
+la fel ca pe documentele aprobate/plătite.
 
 ## Verificări
 

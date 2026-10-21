@@ -4,6 +4,7 @@ import { api } from './api.js';
 import { quantityText } from './receiptQuantities.js';
 
 const fields = { description: 'Produs', quantity: 'Cantitate', unit: 'Unitate', unit_price: 'Preț unitar', vat_rate: 'TVA (%)',
+  cancellation_reason: 'Motivul anulării', cancelled_at: 'Momentul anulării',
   expected_date: 'Termen', status: 'Stare', currency: 'Monedă', invoice_date: 'Data facturii', due_date: 'Scadență',
   net_amount: 'Net', vat_amount: 'TVA', total_amount: 'Total', total_ron: 'Total RON', number: 'Număr', series: 'Serie',
   declared_totals: 'Totaluri de pe document', totals_difference: 'Diferențe de sume',
@@ -18,6 +19,7 @@ const values = { DRAFT: 'Ciornă', CONFIRMED: 'Confirmată', CLOSED: 'Închisă'
 
 function title(event) {
   const after = event.after || {};
+  if (event.entity_type === 'invoices' && event.action === 'CANCEL') return 'Factură anulată';
   if (event.entity_type === 'attachments') return ({ UPLOAD: 'Fișier atașat', WITHDRAW: 'Fișier retras', DOWNLOAD: 'Descărcare pregătită' })[event.action] || 'Document atașat';
   if (event.entity_type === 'invoice_allocations') return event.action === 'RELEASE' ? 'Asociere eliberată' : 'Asociere la recepție';
   if (event.entity_type === 'invoice_issues') return ({ OPEN: 'Blocaj deschis', UPDATE: 'Blocaj actualizat', RESOLVE: 'Blocaj rezolvat', SUPERSEDE: 'Blocaj închis după modificare' })[event.action] || 'Blocaj actualizat';

@@ -349,7 +349,8 @@ def get_order_invoicing(order_id):
         .join(InvoiceItem, InvoiceItem.invoice_id == Invoice.id)
         .where(InvoiceItem.purchase_order_item_id.in_(ids)).order_by(Invoice.id, InvoiceItem.line_number))
     for row in invoice_lines:
-        registered[row.purchase_order_item_id] = registered.get(row.purchase_order_item_id, Decimal("0")) + row.quantity
+        if row.status != "CANCELLED":
+            registered[row.purchase_order_item_id] = registered.get(row.purchase_order_item_id, Decimal("0")) + row.quantity
         document = documents.setdefault(row.id, {"id": row.id, "series": row.series, "number": row.number,
             "status": row.status, "items": []})
         document["items"].append({"purchase_order_item_id": row.purchase_order_item_id, "quantity": format(row.quantity, ".3f")})
@@ -357,7 +358,7 @@ def get_order_invoicing(order_id):
         ReceiptItem.purchase_order_item_id, func.sum(InvoiceAllocation.quantity).label("quantity"))
         .select_from(InvoiceAllocation).join(InvoiceItem, InvoiceItem.id == InvoiceAllocation.invoice_item_id)
         .join(Invoice, Invoice.id == InvoiceItem.invoice_id).join(ReceiptItem, ReceiptItem.id == InvoiceAllocation.receipt_item_id)
-        .where(InvoiceItem.purchase_order_item_id.is_(None), ReceiptItem.purchase_order_item_id.in_(ids), InvoiceAllocation.status == "ACTIVE")
+        .where(InvoiceItem.purchase_order_item_id.is_(None), Invoice.status != "CANCELLED", ReceiptItem.purchase_order_item_id.in_(ids), InvoiceAllocation.status == "ACTIVE")
         .group_by(Invoice.id, Invoice.series, Invoice.number, Invoice.status, ReceiptItem.purchase_order_item_id)
         .order_by(Invoice.id, ReceiptItem.purchase_order_item_id))
     for row in manual_lines:

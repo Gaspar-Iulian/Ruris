@@ -58,7 +58,7 @@ ENTITY_FIELDS["invoice_items"] = {
     "quantity": str, "unit_price": str, "vat_rate": str,
     "net_amount": str, "vat_amount": str, "total_amount": str,
 }
-ENTITY_ACTIONS["invoices"] = {"CREATE", "UPDATE", "VERIFY", "APPROVE", "PAY"}
+ENTITY_ACTIONS["invoices"] = {"CREATE", "UPDATE", "VERIFY", "APPROVE", "PAY", "CANCEL"}
 ENTITY_ACTIONS["invoice_items"] = {"CREATE", "UPDATE", "DELETE"}
 ENTITY_FIELDS["invoice_allocations"] = {
     "invoice_item_id": int, "receipt_item_id": int, "quantity": str, "status": str,
@@ -71,6 +71,7 @@ ENTITY_FIELDS["invoice_issues"] = {
 }
 ENTITY_ACTIONS["invoice_issues"] = {"OPEN", "UPDATE", "RESOLVE", "SUPERSEDE"}
 ENTITY_FIELDS["invoices"].update({
+    "cancelled_by_id": (int, type(None)), "cancelled_at": (str, type(None)), "cancellation_reason": (str, type(None)),
     "declared_totals": (dict, type(None)), "totals_difference": (dict, type(None)),
     "approved_by_id": (int, type(None)), "approved_at": (str, type(None)),
     "paid_by_id": (int, type(None)), "paid_at": (str, type(None)), "payment_reference": (str, type(None)),

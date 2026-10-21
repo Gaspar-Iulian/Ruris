@@ -1,178 +1,134 @@
-# Procese si reguli
+# Procese și reguli implementate
 
-Acesta este proiectul functional pentru prima versiune.
-Regulile de mai jos sunt propuneri de implementare, nu functii deja existente.
+Acest document descrie comportamentul livrat, pentru o firmă și un depozit.
+Scenariile și verificările sunt în [acceptanta.md](acceptanta.md).
 
-## Limitele primei versiuni
+## Comandă și livrare
 
-- O firma si un depozit.
-- Cont individual pentru fiecare persoana, cu un rol principal.
-- Introducere manuala a documentelor si atasarea fisierelor justificative.
-- Comenzi si facturi in RON sau EUR.
-- Aprobarea si evidenta platii; fara initierea transferurilor bancare.
-- Fara OCR, integrare bancara sau integrare cu un program contabil in prima versiune.
+Achizițiile creează furnizori, produse și comenzi în RON sau EUR. Pozițiile
+păstrează descrierea, unitatea, cantitatea, prețul, TVA și termenul. Datele
+comerciale nu sunt înlocuite de modificările ulterioare ale catalogului.
 
-## Problemele si raspunsul aplicatiei
+Comanda se editează în ciornă și se confirmă înainte de recepție. API-ul nu
+implementează modificarea, închiderea sau anularea unei comenzi confirmate.
+Valorile CLOSED/CANCELLED permise în schemă nu reprezintă acțiuni livrate în portal.
 
-| Problema | Comportament propus |
-| --- | --- |
-| Informatii separate intre echipe | Comanda, receptiile si factura sunt legate in aceeasi baza |
-| Livrare partiala | Mai multe receptii pe comanda, cu rest de livrat calculat pe pozitie |
-| Marfa necomandata sau in plus | Exceptie vizibila, cu responsabil si actiune de clarificare |
-| Factura pentru marfa nelivrata | Blocare cu motiv si cantitatea lipsa |
-| Aceeasi marfa facturata de doua ori | Alocari cantitative la receptii si control cumulativ |
-| Stoc necunoscut | Evidenta tuturor intrarilor, iesirilor, retururilor si ajustarilor |
-| Intarzieri observate prea tarziu | Termene pe pozitii si sumar periodic catre achizitii |
-| Modificari greu de urmarit | Audit in aceeasi tranzactie cu operatia |
+Starea comercială și livrarea sunt separate: comanda rămâne „Confirmată”, iar
+livrarea devine „Parțială” sau „Completă”. Restul se calculează pe fiecare poziție
+din cantitatea comandată minus acceptările confirmate. Un termen trecut cu rest
+pozitiv apare în întârzieri și în sumarul responsabilului din Achiziții.
 
-## Comenzi
+## Recepție și stoc
 
-O comanda are furnizor, moneda, responsabil si pozitii.
-Fiecare pozitie pastreaza produsul, unitatea de masura, cantitatea,
-pretul agreat si termenul de livrare.
-Pretul si descrierea de pe document raman pastrate chiar daca se modifica catalogul.
+Depozitul înregistrează recepții din comandă sau marfă fără comandă, inclusiv cu
+produs încă necunoscut. Cantitatea sosită se împarte între acceptată, respinsă
+și în așteptare. Numai acceptarea justificată printr-o comandă compatibilă
+creează stoc și poate acoperi facturi.
 
-Comanda se poate edita liber in ciorna. Confirmarea fixeaza conditiile pentru receptie si verificarea facturii.
-O modificare ulterioara necesita motiv, audit si reverificarea documentelor afectate.
-Nu reducem cantitatea comandata sub cantitatea deja acceptata fara o corectie explicita.
-Restul nelivrat poate fi inchis explicit, cu motiv; nu dispare automat din evidenta.
+Marfa necomandată și surplusul rămân în clarificări. Achizițiile identifică
+produsul și comanda potrivită; Depozitul decide cantitatea acceptată sau respinsă,
+cu motiv. O comandă suplimentară poate acoperi surplusul.
 
-O pozitie este intarziata daca termenul a trecut si exista rest deschis de livrat.
-Starea de livrare se calculeaza din cantitati: nereceptionata, partiala sau completa.
-Anularea si inchiderea sunt actiuni separate de starea livrarii.
+Acceptările ulterioare păstrează poziția fizică inițială și creează poziții
+asociate acesteia. `resolved_quantity` înregistrează partea acceptată ulterior;
+listele nu numără din nou aceeași marfă sosită. Se poate rezolva numai o parte
+din cantitatea în așteptare.
 
-## Receptii
+Confirmarea, mișcarea de stoc și auditul sunt atomice. Repetarea confirmării
+nu creează o a doua intrare. Stocul actual este suma intrărilor acceptate;
+ieșirile, retururile, soldurile inițiale și ajustările nu sunt implementate.
+Facturarea, plata și anularea facturii nu modifică acest stoc.
 
-O receptie are data, furnizor, document de livrare, autor si pozitii.
-Fiecare pozitie se poate lega la o pozitie de comanda.
-Legatura este optionala la inregistrare, pentru a putea raporta marfa necomandata.
-Furnizorul, produsul si unitatea de masura trebuie sa corespunda la asociere.
+## Factură, asociere și aprobare
 
-Se separa cantitatea sosita fizic de cantitatea acceptata, respinsa sau in asteptarea clarificarii.
-Doar cantitatea acceptata printr-o receptie confirmata intra in stocul disponibil
-si poate justifica o factura.
-Surplusul si produsele necomandate raman vizibile in asteptare pana la o decizie.
-Achizitiile pot justifica acceptarea printr-o comanda sau modificare explicita,
-fara a rescrie faptul ca marfa a sosit initial fara acoperire.
+Contabilitatea pornește factura dintr-o comandă, cu condițiile precompletate.
+Vede facturile existente, stările și restul de facturat. Introducerea manuală
+permite poziții din mai multe comenzi ale aceluiași furnizor; legătura efectivă
+se stabilește prin recepțiile asociate.
 
-Confirmarea receptiei, miscarea de stoc si auditul se salveaza impreuna.
-O receptie confirmata se corecteaza prin operatii urmarite, nu prin stergere.
+Referința furnizor + serie + număr este unică după normalizare. Mai multe facturi
+pentru tranșe diferite sunt permise. Salvarea unui document distinct greșit rămâne
+posibilă; aprobarea cere acoperire completă și concordanță.
 
-## Stoc
+O asociere rezervă o cantitate acceptată unei poziții de factură. Totalul
+asocierilor ACTIVE nu poate depăși nici cantitatea acceptată, nici cantitatea
+facturată. Rezervările sunt comune tuturor facturilor, inclusiv celor blocate.
+Propunerea din interfață trebuie salvată; simpla afișare nu rezervă marfa.
 
-Stoc disponibil = sold initial + intrari acceptate - iesiri - retururi + ajustari semnate.
-Marfa in asteptare se afiseaza separat de stocul disponibil.
-Orice ajustare necesita motiv si persoana responsabila.
-Nu permitem stoc disponibil negativ in prima versiune.
-Plata sau facturarea nu modifica stocul fizic.
-O iesire obisnuita de marfa nu anuleaza faptul ca marfa a fost receptionata pentru facturare.
+Verificarea controlează cantitatea, furnizorul, produsul, unitatea, prețul,
+moneda, TVA și totalurile documentului. Diferențele sunt păstrate ca blocaje cu
+responsabil, moment și explicație. O diferență blochează întreaga factură.
 
-## Facturi si verificare
+Calculele folosesc Decimal: net = cantitate × preț, rotunjit la doi zecimali;
+TVA se calculează din net și se rotunjește pe poziție; totalurile însumează
+pozițiile. Frontendul folosește BigInt pentru previzualizare. Netul, TVA și totalul
+furnizorului se introduc separat și sunt obligatorii la verificare. O diferență
+de un ban blochează; previzualizarea nu substituie documentul furnizorului.
 
-Factura pastreaza furnizorul, seria, numarul, data, scadenta, moneda,
-pozitiile, TVA, totalurile si documentul atasat.
-Seria si numarul normalizate sunt unice pentru acelasi furnizor.
-Pozitiile pot acoperi mai multe comenzi si receptii ale aceluiasi furnizor.
-Legaturile se fac pe pozitii, nu doar printr-un numar de comanda pe factura.
+Fluxul este DRAFT → BLOCKED sau VERIFIED → APPROVED → PAID. Reverificarea poate
+rezolva blocajele după corectare sau sosirea mărfii. Aprobarea repetă verificarea
+pe datele curente. Plata este o evidență integrală cu referință și moment,
+fără transfer bancar. Nu există avansuri sau plăți parțiale.
 
-O alocare leaga o pozitie de factura de o cantitate acceptata dintr-o receptie.
-Suma alocarilor active nu poate depasi cantitatea eligibila a receptiei.
-Alocarile retinute pentru facturile in verificare impiedica utilizarea aceleiasi cantitati de doua ori.
-Anularea sau corectarea unei facturi elibereaza alocarile conform operatiei explicite.
-Factura platita se corecteaza printr-un flux documentat, pastrand istoricul platii.
+## Anularea unei înregistrări greșite
 
-Verificarea compara furnizorul, produsul, unitatea de masura, cantitatile,
-preturile agreate, moneda, TVA si totalurile.
-Prima versiune foloseste concordanta cantitativa si de pret fara tolerante comerciale.
-Rotunjirea monetara se aplica dupa o regula documentata si uniforma.
-O diferenta de moneda fata de comanda necesita clarificare explicita;
-conversia pentru raportare in RON nu transforma automat preturile in preturi concordante.
+Numai Contabilitatea poate anula DRAFT, BLOCKED sau VERIFIED, cu motiv și
+versiunea curentă. Operația eliberează asocierile, închide blocajele curente,
+elimină verificarea valutară și înregistrează autorul și momentul în aceeași
+tranzacție. Nu modifică stocul sau istoricul emailurilor.
 
-Propunere pentru prima versiune: o diferenta blocheaza intreaga factura.
-Plata partiala si avansurile necesita reguli suplimentare si raman in afara primei versiuni.
-O factura conforma devine eligibila; contabilitatea aproba explicit plata.
-Inaintea aprobarii se repeta verificarea pe datele curente.
-Aplicatia nu ofera o actiune generala de ignorare a diferentelor.
+Factura CANCELLED rămâne vizibilă, cu poziții, fișiere și audit; nu mai consumă
+cantitatea înregistrată pe comandă și nu poate fi editată sau reverificată.
+Unicitatea referinței se păstrează și după anulare. Fișierele existente pot fi
+descărcate, dar nu se mai încarcă sau retrag fișiere.
 
-Un retur sau o corectie care afecteaza alocari invalideaza verificarea si aprobarea neplatita.
-Pentru facturile deja platite se deschide o exceptie de rezolvat, fara stergerea istoricului.
-Fiecare blocaj indica motivul, documentele implicate, responsabilul si data aparitiei.
-Motivele de blocare sunt separate de starea documentului, deoarece pot exista simultan.
+APPROVED și PAID nu pot fi anulate prin acest flux. Documentele de corecție
+pentru aceste situații necesită un modul separat.
 
 ## Curs valutar
 
-Se pastreaza suma originala, cursul, sursa, data cursului si suma in RON.
-RON foloseste curs 1. EUR foloseste cursul BNR pentru data facturii.
-Propunere pentru o zi fara publicare: ultimul curs publicat anterior, cu data afisata explicit.
-Aceasta politica trebuie confirmata cu contabilitatea inainte de utilizarea reala.
-Implementarea actuala foloseste strict data facturii; nu aplica inca aceasta propunere
-pentru weekenduri sau sarbatori. O zi fara curs publicat produce blocaj explicit.
-Daca un curs necesar nu a fost publicat sau nu poate fi preluat, factura asteapta cursul.
-La indisponibilitatea sursei se foloseste doar un curs local corespunzator regulii stabilite.
-Nu se substituie cursul din ziua curenta pentru o factura istorica.
-Cursul unei facturi aprobate nu se actualizeaza automat.
-Sumele se calculeaza cu Decimal si se stocheaza ca NUMERIC.
+RON folosește curs 1. Pentru EUR, aplicația preia XML-ul anual public BNR și
+caută data exactă a facturii. Reține sursa, checksumul, data, cursul și conversia
+în RON. Cache-ul este protejat împotriva modificării și ștergerii.
 
-## Acces si audit
+O dată fără curs publicat și o preluare eșuată produc blocaje distincte. Nu se
+folosește automat cursul zilei precedente sau cel curent. Un curs local valid
+pentru data respectivă permite verificarea fără o nouă preluare. Cursul reținut
+pentru o factură aprobată nu se schimbă automat.
 
-Achizitiile modifica comenzile; depozitul confirma receptiile si miscarile de stoc;
-contabilitatea gestioneaza facturile si aprobarea platii.
-Fiecare echipa vede din documentele celorlalte doar informatiile necesare fluxului.
-Depozitul nu are nevoie de preturi sau date de plata pentru a receptiona marfa.
-Administratorul tehnic gestioneaza conturile; acest rol nu acorda automat drept de aprobare a platii.
-Accesul se verifica pentru operatii, documente, liste, exporturi si atasamente.
-Conturile dezactivate si modificarile de rol trebuie sa aiba efect chiar daca exista un JWT neexpirat.
+## Acces, audit și concurență
 
-Auditul pastreaza autorul, actiunea, documentul, momentul, motivul si valorile relevante schimbate.
-Nu se inregistreaza parole, tokenuri sau alte secrete.
-Actiunile automate identifica procesul care le-a executat.
-Jurnalul nu poate fi editat sau sters din aplicatie.
-Momentele se stocheaza in UTC si se afiseaza in Europe/Bucharest.
+Rolurile sunt ADMIN, ACHIZITII, DEPOZIT și CONTABILITATE. Administratorul gestionează
+conturile, fără drepturi operaționale implicite. Depozitul primește o proiecție
+fără prețuri și date de plată. Verificarea drepturilor se face în API, inclusiv
+pentru istoric și fișiere. Contul și rolul curent sunt verificate la fiecare cerere.
 
-## Operatii simultane
+Auditul păstrează autorul uman sau procesul, operația, documentul, momentul,
+motivul și valorile relevante înainte/după. Nu include parole sau tokenuri.
+Este salvat în tranzacția operației și protejat în PostgreSQL la UPDATE/DELETE.
 
-Confirmarea receptiei, aprobarea facturii si miscarea stocului folosesc tranzactii PostgreSQL.
-Verificarile se repeta in tranzactie, cu blocarea randurilor relevante cand este necesar.
-Constrangerile bazei impun unicitatea documentelor si validitatea cantitatilor individuale.
-Limitele cumulative intre documente se verifica prin servicii si blocari, nu doar in React.
-Operatiile de confirmare suporta reluarea cererii fara dublarea efectului.
-Formularele detecteaza o versiune depasita a documentului inainte de salvare.
+`version` respinge salvarea dintr-un formular vechi. Blocările de rând PostgreSQL
+protejează cantitățile și tranzițiile simultane. Aprobarea și anularea aceleiași
+facturi nu pot reuși amândouă. După un rezultat incert, portalul cere reîncărcarea
+datelor înainte de o nouă operație.
 
-## Emailuri periodice
+## Emailuri și clarificări
 
-Un sumar zilnic la 08:00 Europe/Bucharest include doar problemele inca active.
-Achizitiile primesc intarzierile si diferentele care necesita discutia cu furnizorul.
-Depozitul primeste receptiile de clarificat; contabilitatea primeste blocajele si scadentele.
-Continutul respecta aceleasi permisiuni ca interfata.
-Rezolvarea problemei o elimina din urmatoarele sumare.
+Workerul verifică periodic programul și generează sumarul zilnic la 08:00,
+Europe/Bucharest. Sunt implementate întârzierile pentru responsabilul din
+Achiziții, recepțiile care cer clarificare comercială, marfa în așteptarea
+deciziei Depozitului și facturile blocate pentru Contabilitate. Nu există sumar
+separat pentru facturi scadente.
 
-Notificarile se inregistreaza in baza, apoi un worker incearca trimiterea prin SMTP.
-Se pastreaza destinatarul, perioada sumarului, incercarile si rezultatul.
-O cheie unica pe destinatar si perioada previne programarea repetata a aceluiasi sumar.
-Erorile se reincearca; o intrerupere dupa acceptarea de catre SMTP poate totusi produce o retrimitere.
-Nu promitem livrare exact o data prin SMTP.
+Outboxul păstrează mesajul, destinatarul, încercările și rezultatul. Cheia
+utilizator + tip + transport + zi previne programarea repetată. Un mesaj deja
+trimis nu este trimis din nou pentru modificări apărute în aceeași zi.
+Înainte de trimitere se verifică din nou destinatarul și conținutul curent.
 
-## Scenarii de acceptare
+Eșecurile cunoscute pot fi reîncercate, cel mult de trei ori. O acceptare SMTP
+incertă devine UNKNOWN și nu se retrimite automat: SMTP nu garantează livrare
+exact o dată. SENT înseamnă acceptat de serverul SMTP, nu confirmat citit.
 
-| Scenariu | Rezultat asteptat |
-| --- | --- |
-| Comandat 100, acceptat 60, facturat 100 | Factura blocata: lipsesc 40 receptionate |
-| Comandat 100, acceptat 60, facturat 60 | Eligibila daca preturile si celelalte verificari corespund |
-| Ulterior acceptat inca 40 | Comanda completa; factura blocata poate fi reverificata |
-| Doua facturi pentru aceleasi 60 acceptate | Alocarile cumulative nu depasesc 60, inclusiv la cereri simultane |
-| Doua apasari pe confirmarea aceleiasi receptii | O singura intrare in stoc |
-| Produs necomandat sau surplus | Inregistrat in asteptare, fara cresterea stocului disponibil |
-| Retur pentru marfa alocata unei facturi aprobate neplatite | Aprobarea se invalideaza si se cere rezolvare |
-| Termen depasit si rest deschis | Comanda apare in sumarul achizitiilor |
-| Depozitul apeleaza direct API-ul de aprobare factura | Acces refuzat |
-| Curs istoric indisponibil | Factura asteapta cursul, fara conversie la cursul curent |
-
-## Decizii de validat cu firma
-
-- Blocarea intregii facturi sau permiterea aprobarii unei parti.
-- Politica pentru zilele fara curs publicat si regula de rotunjire monetara.
-- Destinatarii, frecventa sumarului si responsabilitatea pentru fiecare tip de exceptie.
-- Necesitatea avansurilor, tolerantei de pret si documentelor de corectie in prima versiune.
-
-Aceste decizii nu impiedica pregatirea modelelor de baza.
-Nu activam comportamente dependente de o politica neconfirmata in utilizarea reala.
+„Clarificări” arată problemele curente. „Notificări” este istoricul personal al
+destinatarului, filtrat și după rolul său actual; nu este inbox comun de echipă.
+Rezolvarea problemei o elimină din sumarele viitoare, fără ștergerea mesajelor trimise.

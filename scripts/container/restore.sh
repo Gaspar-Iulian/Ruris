@@ -23,7 +23,9 @@ while IFS= read -r entry; do
         || { echo "Unexpected attachment archive path." >&2; exit 1; }
 done < /tmp/ruris-archive-files
 tar --list --verbose --gzip --file="$source/attachments.tar.gz" | awk 'substr($0,1,1)!="-" && substr($0,1,1)!="d" {exit 1}'
-pg_restore --exit-on-error --single-transaction --no-owner --no-acl --dbname="$PGDATABASE" "$source/database.dump"
+# PostgreSQL creates public in an empty database; retain that existing schema.
+pg_restore --list "$source/database.dump" | awk '!($4 == "SCHEMA" && $5 == "-" && $6 == "public")' > /tmp/ruris-restore-list
+pg_restore --exit-on-error --single-transaction --no-owner --no-acl --use-list=/tmp/ruris-restore-list --dbname="$PGDATABASE" "$source/database.dump"
 tar --extract --gzip --file="$source/attachments.tar.gz" --directory=/attachments --no-same-owner
 chown -R 10001:10001 /attachments
 echo "Database and attachments restored. Verify attachments before starting the portal."

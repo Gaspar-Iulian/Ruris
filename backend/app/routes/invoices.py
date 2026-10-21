@@ -11,11 +11,42 @@ from app.services.invoice_allocations import create_allocations, list_allocation
 from app.services.invoice_verification import approve_invoice, verify_invoice, list_issues
 from app.services.invoice_payments import record_payment
 from app.services.invoice_matching import get_matching
+from app.services.invoice_cancellation import cancel_invoice
 from app.services.document_history import get_document_history
 from app.routes.pagination import pagination_args
 
 
 invoices_bp = Blueprint("invoices", __name__)
+
+
+@invoices_bp.post("/<int:invoice_id>/cancel")
+@roles_required(Role.CONTABILITATE)
+def cancel(invoice_id):
+    if not 1 <= invoice_id <= 9223372036854775807:
+        return jsonify(message="Factura nu a fost gasita."), 404
+    if not request.is_json:
+        return jsonify(message="Cererea trebuie sa contina JSON."), 415
+    request.max_content_length = 8192
+    try:
+        data = request.get_json()
+    except RequestEntityTooLarge:
+        return jsonify(message="Cererea este prea mare."), 413
+    except BadRequest:
+        return jsonify(message="Corpul cererii nu este JSON valid."), 400
+    if not isinstance(data, dict) or set(data) != {"version", "reason"}:
+        return jsonify(message="Trimite version si reason."), 400
+    try:
+        return jsonify(invoice=cancel_invoice(actor_user_id=current_user.id, invoice_id=invoice_id, **data))
+    except InvoiceForbiddenError as error:
+        return jsonify(message=str(error)), 403
+    except InvoiceNotFoundError as error:
+        return jsonify(message=str(error)), 404
+    except InvoiceConflictError as error:
+        return jsonify(message=str(error)), 409
+    except ValueError as error:
+        return jsonify(message=str(error)), 400
+    except SQLAlchemyError:
+        return jsonify(message="Anularea nu a putut fi confirmata. Reincarca documentul inainte de o noua incercare."), 503
 
 
 @invoices_bp.patch("/<int:invoice_id>/declared-totals")

@@ -56,6 +56,8 @@ export default function InvoiceWorkflow({ invoice, onChanged, onExpired, onBusyC
   const [requiresReload, setRequiresReload] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editingTotals, setEditingTotals] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
   const [declaredTotals, setDeclaredTotals] = useState(emptyTotals);
   const [paymentReference, setPaymentReference] = useState('');
   const [paidAt, setPaidAt] = useState(localNow);
@@ -105,6 +107,7 @@ export default function InvoiceWorkflow({ invoice, onChanged, onExpired, onBusyC
       setState({ data }); setQuantities({}); onChanged(data.invoice);
       setNotice(verifyAfter ? (data.invoice.status === 'VERIFIED' ? 'Asocierile au fost salvate. Factura este verificată.' : 'Asocierile au fost salvate. Factura are în continuare blocaje.') : message);
       if (action === 'declared-totals') setEditingTotals(false);
+      if (action === 'cancel') { setCancelling(false); setCancelReason(''); }
     } catch (failure) {
       if ([401, 422].includes(failure.status)) onExpired();
       else if (failure.status === 0 || failure.status >= 500) {
@@ -142,6 +145,11 @@ export default function InvoiceWorkflow({ invoice, onChanged, onExpired, onBusyC
     perform('pay', { payment_reference: paymentReference.trim(), paid_at: moment.toISOString() }, 'Plata a fost înregistrată.');
   }
 
+  function cancelInvoice() {
+    if (!cancelReason.trim()) { setError('Completează motivul anulării.'); return; }
+    perform('cancel', { reason: cancelReason.trim() }, 'Factura a fost anulată. Asocierile au fost eliberate.', false);
+  }
+
   function saveTotals() {
     try {
       const parsed = readTotals(declaredTotals);
@@ -159,12 +167,13 @@ export default function InvoiceWorkflow({ invoice, onChanged, onExpired, onBusyC
   if (editing) return <InvoiceForm key={`${current.id}-${current.version}`} initialInvoice={current} onExpired={onExpired} onBusyChange={onBusyChange} onCancel={() => { setEditing(false); refresh(); }} onCreated={(updated) => { setEditing(false); onChanged(updated); setNotice('Factura a fost corectată. Este necesară verificarea.'); }} />;
 
   return <section className="invoice-workflow" aria-label="Procesare factură">
+    {current.status === 'CANCELLED' && <div className="notice" role="status"><strong>Factura este anulată.</strong><p>{current.cancellation_reason}</p><p>Anulată la {new Date(current.cancelled_at).toLocaleString('ro-RO')}. Documentul rămâne disponibil pentru consultare.</p></div>}
     <div className="invoice-summary"><span>Net: <strong>{display(current.net_amount)} {current.currency}</strong></span><span>TVA: <strong>{display(current.vat_amount)} {current.currency}</strong></span><span>Total: <strong>{display(current.total_amount)} {current.currency}</strong></span></div>
     <section className="invoice-totals-comparison" aria-label="Comparare totaluri"><h3>Totaluri factură ({current.currency})</h3>
-      {current.declared_totals ? <div className="table-scroll"><table><thead><tr><th>Sumă</th><th>Din poziții</th><th>Pe document</th><th>Diferență</th></tr></thead><tbody>{[['net_amount', 'Net'], ['vat_amount', 'TVA'], ['total_amount', 'Total']].map(([key, label]) => <tr key={key}><th scope="row">{label}</th><td>{display(current[key])}</td><td>{display(current.declared_totals[key])}</td><td className={current.totals_difference?.[key] !== '0.00' ? 'candidate-difference' : ''}>{display(current.totals_difference?.[key])}</td></tr>)}</tbody></table></div> : <p className="notice">Totalurile de pe document nu sunt completate. Completează-le înainte de verificare.</p>}
+      {current.declared_totals ? <div className="table-scroll"><table><thead><tr><th>Sumă</th><th>Din poziții</th><th>Pe document</th><th>Diferență</th></tr></thead><tbody>{[['net_amount', 'Net'], ['vat_amount', 'TVA'], ['total_amount', 'Total']].map(([key, label]) => <tr key={key}><th scope="row">{label}</th><td>{display(current[key])}</td><td>{display(current.declared_totals[key])}</td><td className={current.totals_difference?.[key] !== '0.00' ? 'candidate-difference' : ''}>{display(current.totals_difference?.[key])}</td></tr>)}</tbody></table></div> : <p className="notice">{mutable ? 'Totalurile de pe document nu sunt completate. Completează-le înainte de verificare.' : 'Totalurile de pe document nu au fost completate.'}</p>}
     </section>
     {current.total_ron !== null && current.total_ron !== undefined && <div className="notice">Total în RON: <strong>{display(current.total_ron)}</strong>{current.exchange_rate_source === 'BNR' && <> · Curs BNR: {display(current.exchange_rate_value)} · Data cursului: {current.exchange_rate_date}</>}</div>}
-    {current.currency === 'EUR' && !current.total_ron && <p className="field-hint">Cursul BNR din {current.invoice_date} se preia la verificare. Conversia necesită un curs publicat pentru această dată.</p>}
+    {mutable && current.currency === 'EUR' && !current.total_ron && <p className="field-hint">Cursul BNR din {current.invoice_date} se preia la verificare. Conversia necesită un curs publicat pentru această dată.</p>}
     {current.exchange_rate_source === 'BNR' && <p className="field-hint"><a href={`https://curs.bnr.ro/files/xml/years/nbrfxrates${current.exchange_rate_date.slice(0, 4)}.xml`} target="_blank" rel="noreferrer">Sursa cursului BNR</a></p>}
     {notice && <div className="notice success-notice" role="status">{notice}</div>}
     {error && <div className="error-message" role="alert" tabIndex={-1} ref={errorBox}><CircleAlert size={18} />{error}</div>}
@@ -179,8 +188,13 @@ export default function InvoiceWorkflow({ invoice, onChanged, onExpired, onBusyC
         {mutable && (line.candidates.length ? line.candidates.map((candidate) => <div className="invoice-candidate" key={candidate.receipt_item_id}><div><strong>{candidate.receipt_number} · {candidate.order_number}</strong><p>Acceptat: {quantityText(candidate.accepted_quantity)} · Asociat facturilor: {quantityText(candidate.allocated_quantity)} · Disponibil: {quantityText(candidate.available_quantity)}</p>{candidate.differences.length > 0 && <p className="candidate-difference">{candidate.differences.map((code) => differenceLabels[code]).join(' · ')}. Comandă: {display(candidate.order_unit_price)} {candidate.order_currency}, TVA {display(candidate.order_vat_rate)}%.</p>}</div><div className="form-field"><label htmlFor={`allocation-${line.id}-${candidate.receipt_item_id}`}>De asociat · poziția {line.line_number} · {candidate.receipt_number}</label><input id={`allocation-${line.id}-${candidate.receipt_item_id}`} inputMode="decimal" maxLength={19} disabled={!candidate.eligible || quantity(candidate.available_quantity).scaled === 0n} value={quantities[`${line.id}:${candidate.receipt_item_id}`] || ''} onChange={(event) => setQuantities((previous) => ({ ...previous, [`${line.id}:${candidate.receipt_item_id}`]: event.target.value }))} /></div></div>) : <p className="notice">Nu există recepții confirmate cu marfă acceptată pentru această poziție.</p>)}
       </section>)}
       {data.allocations.length > 0 && <section aria-label="Asocieri active"><h3>Asocieri active</h3>{data.allocations.map((allocation) => <div className="active-allocation" key={allocation.id}><span>Poziția {data.items.find((line) => line.id === allocation.invoice_item_id)?.line_number} · {quantityText(allocation.quantity)} · {allocation.receipt_number || 'Recepție indisponibilă'} · {allocation.order_number || '—'}</span>{mutable && <button className="text-button" aria-label={`Eliberează asocierea #${allocation.id}`} onClick={() => perform('allocations/release', { allocation_ids: [allocation.id] }, 'Asocierea a fost eliberată.')}>Eliberează</button>}</div>)}</section>}
-      {current.status !== 'PAID' && <div className="form-field workflow-reason"><label htmlFor="invoice-operation-reason">Observații operație</label><input id="invoice-operation-reason" maxLength={1000} value={reason} onChange={(event) => setReason(event.target.value)} /></div>}
+      {(mutable || current.status === 'APPROVED') && <div className="form-field workflow-reason"><label htmlFor="invoice-operation-reason">Observații operație</label><input id="invoice-operation-reason" maxLength={1000} value={reason} onChange={(event) => setReason(event.target.value)} /></div>}
       {mutable && <div className="workflow-actions"><button className="button button-secondary" onClick={() => allocate()}>Salvează asocierile</button><button className="button button-primary" onClick={() => canAssociate ? allocate(true) : perform('verify', {}, 'Verificarea facturii s-a încheiat.', false)}>{canAssociate ? 'Asociază și verifică' : 'Verifică factura'}</button>{current.status === 'VERIFIED' && <button className="button button-primary" onClick={() => perform('approve', {}, 'Factura a fost aprobată.')}>Aprobă factura</button>}</div>}
+      {mutable && !editingTotals && !cancelling && <div className="document-actions"><button type="button" className="button button-secondary" onClick={() => { setCancelling(true); setCancelReason(''); setError(''); }}>Anulează factura</button></div>}
+      {mutable && cancelling && <section className="invoice-cancellation" aria-label="Anulare factură"><h3>Anulare factură</h3><p className="field-hint">Factura rămâne în istoric. Asocierile active vor fi eliberate, iar cantitățile vor redeveni disponibile.</p>
+        <div className="form-field"><label htmlFor="invoice-cancel-reason">Motivul anulării</label><input id="invoice-cancel-reason" maxLength={1000} value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} /></div>
+        <div className="workflow-actions"><button type="button" className="button button-primary" onClick={cancelInvoice}>Confirmă anularea</button><button type="button" className="button button-secondary" onClick={() => setCancelling(false)}>Păstrează factura</button></div>
+      </section>}
       {current.status === 'APPROVED' && <section className="payment-form" aria-label="Înregistrare plată"><h3>Înregistrează plata</h3><div className="user-form-grid"><div className="form-field"><label htmlFor="invoice-payment-reference">Referință plată</label><input id="invoice-payment-reference" maxLength={120} value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} /></div><div className="form-field"><label htmlFor="invoice-paid-at">Data și ora plății</label><input id="invoice-paid-at" type="datetime-local" step="0.001" value={paidAt} onChange={(event) => setPaidAt(event.target.value)} /></div></div><button className="button button-primary" onClick={pay}>Înregistrează plata</button></section>}
       {current.status === 'PAID' && <div className="notice" role="status">Plată înregistrată: <strong>{current.payment_reference}</strong> · {new Date(current.paid_at).toLocaleString('ro-RO')}</div>}
     </fieldset>

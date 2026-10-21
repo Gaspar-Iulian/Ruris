@@ -140,7 +140,7 @@ redirecționarea PowerShell.
 
 În `backups/ruris-<data>-<identificator>/` apar:
 
-- `database.dump`: baza completă, inclusiv utilizatori, audit și jurnal email;
+- `database.dump`: schema aplicației `public`, inclusiv utilizatori, audit și jurnal email;
 - `attachments.tar.gz`: documentele, inclusiv cele retrase;
 - `manifest.txt`: format, proiect, bază, migrare și moment UTC;
 - `SHA256SUMS`: verificarea integrității;
@@ -204,6 +204,19 @@ npm.cmd test -- --config playwright.docker.config.js --grep 'warehouse evidence 
 După restaurare, pe URL-ul destinației, testul `restored Docker` verifică stocul,
 factura plătită și octeții documentului descărcat. Aceste conturi sunt doar pentru
 testul izolat; instalarea obișnuită folosește administratorul creat interactiv.
+
+Pentru a include anularea în proba de backup, rulează și scenariul
+`--grep 'cancelling a duplicate'` pe sursa izolată înainte de backup. Pe copia
+restaurată setează `RURIS_DOCKER_CANCEL_RESTORE=1`, URL-ul destinației și rulează:
+
+```powershell
+npm.cmd test -- --config playwright.docker.config.js docker-restore.spec.js
+```
+
+Cele două teste verifică și motivul anulării, autorul, momentul, istoricul și
+PDF-ul păstrat. Fără variabila suplimentară, testul specific anulării este omis.
+Nu rula scenariile de creare de date de două ori în aceeași bază: referințele
+demonstrative sunt fixe și protejate prin unicitate.
 
 Surse pentru configurare: [ordinea de pornire Compose](https://docs.docker.com/compose/how-tos/startup-order/),
 [Gunicorn cu Flask](https://flask.palletsprojects.com/en/stable/deploying/gunicorn/),

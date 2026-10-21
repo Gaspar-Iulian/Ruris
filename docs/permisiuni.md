@@ -131,6 +131,15 @@ catre ADMIN, ACHIZITII sau DEPOZIT. Transportul este configurabil; implicit este
 - Conturile inactive sunt excluse, iar destinatarul și conținutul sunt recontrolate
   la preluarea mesajului. Administratorul nu vede implicit notificările de business.
 
+## Anularea facturilor
+
+`POST /api/invoices/{id}/cancel` este disponibil numai pentru Contabilitate,
+cu JWT, CSRF, `version` și `reason`. Sunt permise stările DRAFT, BLOCKED și
+VERIFIED. APPROVED, PAID și CANCELLED refuză operația cu 409.
+Eliberarea asocierilor, închiderea blocajelor, autorul, momentul, motivul și auditul
+sunt salvate atomic. Stocul fizic rămâne neschimbat. Factura și fișierele sale
+rămân consultabile; modificarea, o nouă verificare sau plata nu mai sunt permise.
+
 ## Documente atașate
 
 Atașamentele sunt implementate cu reguli separate pe document:
